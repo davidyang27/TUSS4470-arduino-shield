@@ -14,7 +14,8 @@ const int DRIVE_FREQUENCY_TIMER_DIVIDER = (16000000 / (2 * DRIVE_FREQUENCY)) - 1
 // #define FILTER_FREQUENCY_REGISTER 0x09 // 68 kHz
 // #define FILTER_FREQUENCY_REGISTER 0x10 // 100 kHz
 // #define FILTER_FREQUENCY_REGISTER 0x18 // 151 kHz
-#define FILTER_FREQUENCY_REGISTER 0x1E // 200 kHz
+#define FILTER_FREQUENCY_REGISTER 0x1E // 206.05 kHz
+//#define FILTER_FREQUENCY_REGISTER 0x1D // 196.78 kHz
 
 // Number of ADC samples to take per measurement cycle
 // Each sample takes approximately 13.2 microseconds
