@@ -1,54 +1,29 @@
-# TUSS4470-arduino-shield
+# TUSS4470 Arduino Shield
+## Echo Sounder Interface Setup Guide
 
-# Echo Sounder Interface Setup Guide
+This repository contains an **Echo Sounder interface** using a **TUSS4470 Arduino shield** and a **Python-based waterfall / echogram display**.
 
-This guide provides step-by-step instructions to set up the environment for the Echo Sounder display interface.
+This document describes how to set up the Python environment and run the display interface.
+
+---
 
 ## 1. Environment Preparation
-If you have previously installed the dark theme module, please remove it first to avoid conflicts.
+
+If you have previously installed a dark theme module, please remove it first to avoid conflicts.
 
 ```powershell
-# Remove old version
 pip uninstall -y pyqtdarktheme
 
-## 2. Virtual Environment Management
-Check your current directory for existing environments, then create and activate a new one.
 
-# Check existing folders
+2. Virtual Environment Management
+
+Check your current directory for existing folders, then create and activate a new virtual environment.
+
+# List current directory
 ls
 
-# Create the virtual environment
+# Create virtual environment
 python -m venv venv
 
-# Activate the virtual environment
+# Activate virtual environment (Windows PowerShell)
 .\venv\Scripts\Activate.ps1
-
-Note: If you get an error saying "scripts are disabled", run this command: Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned
-
-3. Dependency Installation
-Ensure you have a requirements.txt file in your folder with these contents:
-
-numpy
-
-pyserial==3.4
-
-PyQt5
-
-pyqtgraph
-
-pyqtdarktheme
-
-Run the following commands to install everything correctly:
-
-# Install standard dependencies
-pip install -r requirements.txt
-
-# Force install specific dark theme version
-pip install pyqtdarktheme==2.1.0 --ignore-requires-python
-
-4. Run Application
-Execute the main interface script:
-
-python .\echo_interface.py
-
-Project Requirements Summary: | Package | Version | | :--- | :--- | | numpy | latest | | pyserial | 3.4 | | PyQt5 | latest | | pyqtgraph | latest | | pyqtdarktheme | 2.1.0 |
