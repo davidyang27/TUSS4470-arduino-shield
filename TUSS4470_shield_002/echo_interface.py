@@ -56,6 +56,18 @@ MAX_DEPTH = NUM_SAMPLES * SAMPLE_RESOLUTION  # Total depth in cm
 depth_labels = {int(i / SAMPLE_RESOLUTION): f"{i / 100}" for i in range(0, int(MAX_DEPTH), Y_LABEL_DISTANCE)}
 
 
+# ============================================================
+#  Sonar Display Parameters
+# ============================================================
+
+DISPLAY_GAIN = 1.3        # 顯示前整體增益
+DESPECKLE_WINDOW = 3      # 去噪鄰域大小 (3 或 5)
+DESPECKLE_THRESHOLD = 10  # 噪點門檻
+SMOOTH_ALPHA = 0.25       # 深度方向平滑係數 (0.2~0.4)
+TVG_STRENGTH = 1.2        # 深度 TVG 強度 (1.2~1.6)
+BOTTOM_THICKNESS = 6      # 底線厚度 (pixels)
+BOTTOM_BOOST = 60         # 底線加亮量
+
 def read_packet(ser):
     while True:
         header = ser.read(1)
@@ -120,6 +132,49 @@ def get_local_ip():
         return ip
     except Exception:
         return "127.0.0.1"
+
+def sonar_display_pipeline(raw_line):
+    """
+    Fishfinder-style sonar display pipeline
+    """
+    # ---------- 0. 轉成 float ----------
+    line = raw_line.astype(np.float32)
+
+    # ---------- 1. 顯示前整體增益 ----------
+    line = np.clip(line * DISPLAY_GAIN, 0, 255)
+
+    # ---------- 2. 去除孤立 speckle 噪點 ----------
+    out = line.copy()
+    half = DESPECKLE_WINDOW // 2
+
+    for i in range(half, len(line) - half):
+        local = line[i - half:i + half + 1]
+        local_mean = np.mean(local)
+
+        # 孤立亮點、周圍能量低 → 移除
+        if line[i] > local_mean + DESPECKLE_THRESHOLD and local_mean < DESPECKLE_THRESHOLD:
+            out[i] = 0
+
+    line = out
+
+    # ---------- 3. 深度方向輕微平滑 ----------
+    for i in range(1, len(line)):
+        line[i] = SMOOTH_ALPHA * line[i] + (1 - SMOOTH_ALPHA) * line[i - 1]
+
+    # ---------- 4. Depth TVG（越深越亮） ----------
+    depth_gain = np.linspace(1.0, TVG_STRENGTH, len(line))
+    line *= depth_gain
+
+    # ---------- 5. Bottom lock（底線加粗） ----------
+    bottom_idx = np.argmax(line)
+    start = max(0, bottom_idx - BOTTOM_THICKNESS // 2)
+    end = min(len(line), bottom_idx + BOTTOM_THICKNESS // 2)
+
+    line[start:end] = np.clip(line[start:end] + BOTTOM_BOOST, 0, 255)
+
+    # ---------- 6. 輸出 ----------
+    return np.clip(line, 0, 255).astype(np.uint8)
+
 
 
 class SerialReader(QThread):
@@ -462,7 +517,7 @@ class WaterfallApp(QMainWindow):
         self.nmea_socket = None
         self.nmea_output_enabled = False
 
-        self.current_gradient = 'cyclic'  # default color scheme
+        self.current_gradient = 'inferno'  # default color scheme
         self.current_speed = SPEED_OF_SOUND  # default sound speed (343)
 
         self.setWindowTitle("Open Echo Interface")
@@ -771,21 +826,26 @@ class WaterfallApp(QMainWindow):
             print("⚠️ No active serial connection to disconnect")
 
     def waterfall_plot_callback(self, spectrogram, depth_index, temperature, drive_voltage):
+        filtered_line = sonar_display_pipeline(spectrogram)
+        
         # 1. 更新瀑布圖數據
         self.data = np.roll(self.data, -1, axis=0)
-        self.data[-1, :] = spectrogram
+        self.data[-1, :] = filtered_line
         self.imageitem.setImage(self.data.T, autoLevels=False)
 
         # 動態調整對比度 (這部分保持你原本的邏輯)
-        sigma = np.std(self.data)
-        mean = np.mean(self.data)
-        self.imageitem.setLevels((mean - 2 * sigma, mean + 2 * sigma))
+        #sigma = np.std(self.data)
+        #mean = np.mean(self.data)
+        #self.imageitem.setLevels((mean - 2 * sigma, mean + 2 * sigma))
+
+        # 建議的固定顯示範圍（可調）
+        self.imageitem.setLevels((10, 220))
 
         # 2. 計算深度
         depth_cm = depth_index * SAMPLE_RESOLUTION
         self.depth_label.setText(f"Depth: {depth_cm:.1f} cm | Index: {depth_index:.0f}")
         self.temperature_label.setText(f"Temperature: {temperature:.1f} °C")
-        self.drive_voltage_label.setText(f"Override Idx: {drive_voltage:.0f}")
+        self.drive_voltage_label.setText(f"Override Idx: {drive_voltage:.0f} | Depth: {drive_voltage* SAMPLE_RESOLUTION:.0f} cm")
 
         # 3. 核心邏輯：判斷誤差並決定顏色與紅線顯示
         # 注意：depth_index 是 TUSS4470 偵測到的，drive_voltage 是我們塞進去的 Override Index
@@ -798,8 +858,13 @@ class WaterfallApp(QMainWindow):
         if is_valid:
             self.depth_line.setPos(depth_index)
             self.depth_line.show()  # 在範圍內才顯示線
+            self.depth_line.setPen(pg.mkPen((255, 0, 0), width=3))
         else:
-            self.depth_line.hide()  # 超出範圍則隱藏，避免誤導
+            #self.depth_line.hide()  # 超出範圍則隱藏，避免誤導
+            self.depth_line.setPen(pg.mkPen((255, 0, 0, 120), width=2))
+
+
+        
 
         # --- 處理大字深度顯示顏色 ---
         if self.large_depth_label.isVisible():
