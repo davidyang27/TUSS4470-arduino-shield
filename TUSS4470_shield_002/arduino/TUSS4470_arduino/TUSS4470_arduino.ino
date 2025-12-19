@@ -200,19 +200,19 @@ void loop() {
 void sendData() {
   // Header fields
   frame.depth_index = depthDetectSample;
-  frame.temp_scaled = (int16_t)(temperature * 100.0f);
   
-  // 注意：這裡不要再寫 frame.vDrv_scaled = (vDrv * 100)，否則會覆蓋掉上面的 override 結果
-  // 保持 frame.vDrv_scaled 為 loop 中設定好的值
-
-  // Compute checksum
+  // 將 DRIVE_FREQUENCY (如 200000) 除以 1000 存入 temp_scaled (變為 200)
+  // 這樣 Python 接收到後乘回 1000 即可還原
+  frame.temp_scaled = (int16_t)(DRIVE_FREQUENCY / 1000); 
+  
+  // vDrv_scaled 維持 loop 中設定好的 overrideSample 邏輯
+  // ...其餘 checksum 程式碼保持不變...
+  
   frame.checksum = 0;
   frame.checksum ^= (uint8_t)(frame.depth_index & 0xFF);
   frame.checksum ^= (uint8_t)(frame.depth_index >> 8);
   frame.checksum ^= (uint8_t)(frame.temp_scaled & 0xFF);
   frame.checksum ^= (uint8_t)(frame.temp_scaled >> 8);
-  
-  // vDrv checksum (這裡會抓取到我們存入的 overrideSample)
   frame.checksum ^= (uint8_t)(frame.vDrv_scaled & 0xFF);
   frame.checksum ^= (uint8_t)(frame.vDrv_scaled >> 8);
 
