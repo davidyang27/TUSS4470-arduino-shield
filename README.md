@@ -19,11 +19,16 @@ pip uninstall -y pyqtdarktheme
 
 Check your current directory for existing folders, then create and activate a new virtual environment.
 
-# List current directory
+List current directory
+```powershell
 ls
-
-# Create virtual environment
+```
+Create virtual environment
+```powershell
 python -m venv venv
+```
 
-# Activate virtual environment (Windows PowerShell)
+Activate virtual environment (Windows PowerShell)
+```powershell
 .\venv\Scripts\Activate.ps1
+```
