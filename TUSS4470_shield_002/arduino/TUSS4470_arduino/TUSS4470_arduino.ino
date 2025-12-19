@@ -126,11 +126,13 @@ void setup() {
   // Initialize TUSS4470 with specific configurations
   // check TUSS4470 datasheet for more settings!
   tuss4470Write(0x10, FILTER_FREQUENCY_REGISTER);  // Set BPF center frequency
+  tuss4470Write(0x11, 0x10);                       // 設定 Q=5 提升魚探靈敏度
   tuss4470Write(0x16, 0xF);                        // Enable VDRV (not Hi-Z)
   tuss4470Write(0x1A, 0x0F);                       // Set burst pulses to 16
   tuss4470Write(0x17, THRESHOLD_VALUE);            // enable threshold detection on OUT_4
-  tuss4470Write(0x13, 0x01);                       // Set LNA gain (0x00 = 15V/V, 0x01 = 10V/V, 0x02 = 20V/V, 0x03 = 12.5V/V)
-
+  //tuss4470Write(0x13, 0x01);                       // Set LNA gain (0x00 = 15V/V, 0x01 = 10V/V, 0x02 = 20V/V, 0x03 = 12.5V/V)
+  //tuss4470Write(0x13, 0x05);                       // 修改後：0x05 (LNA 10V/V, VOUT 5.0V)
+  tuss4470Write(0x13, 0x06);
   // Set up ADC
   ADCSRA = (1 << ADEN) |  // Enable ADC
            (1 << ADPS2);  // Set prescaler to 16 (16 MHz / 16 = 1 MHz ADC clock)
