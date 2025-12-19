@@ -22,13 +22,13 @@ Check your current directory for existing folders, then create and activate a ne
 List current directory
 ```powershell
 ls
-```
+
 Create virtual environment
-```powershell
+
 python -m venv venv
-```
+
 
 Activate virtual environment (Windows PowerShell)
-```powershell
+
 .\venv\Scripts\Activate.ps1
 ```
