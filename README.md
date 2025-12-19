@@ -14,7 +14,7 @@ If you have previously installed a dark theme module, please remove it first to 
 ```powershell
 pip uninstall -y pyqtdarktheme
 
-
+```
 2. Virtual Environment Management
 
 Check your current directory for existing folders, then create and activate a new virtual environment.
