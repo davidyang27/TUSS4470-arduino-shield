@@ -29,3 +29,12 @@ python -m venv venv
 # Activate virtual environment (Windows PowerShell)
 .\venv\Scripts\Activate.ps1
 ```
+
+PowerShell Execution Policy
+
+If you see the error:
+
+| running scripts is disabled on this system
+
+Run this command once:
+
