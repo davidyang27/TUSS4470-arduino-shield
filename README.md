@@ -37,4 +37,27 @@ If you see the error:
 > running scripts is disabled on this system
 
 Run this command once:
+```powershell
+Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned
+```
+## 3. Dependency Installation
+
+Install dependencies:
+```powershell
+pip install -r requirements.txt
+```
+Force install the supported dark theme version:
+```powershell
+pip install pyqtdarktheme==2.1.0 --ignore-requires-python
+```
+## 4. Run the Application
+
+Start the Echo Sounder interface:
+```powershell
+python echo_interface.py
+```
+
+
+
+
 
