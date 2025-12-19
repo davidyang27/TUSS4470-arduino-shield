@@ -65,8 +65,6 @@ DESPECKLE_WINDOW = 3      # 去噪鄰域大小 (3 或 5)
 DESPECKLE_THRESHOLD = 10  # 噪點門檻
 SMOOTH_ALPHA = 0.25       # 深度方向平滑係數 (0.2~0.4)
 TVG_STRENGTH = 1.2        # 深度 TVG 強度 (1.2~1.6)
-BOTTOM_THICKNESS = 6      # 底線厚度 (pixels)
-BOTTOM_BOOST = 60         # 底線加亮量
 
 def read_packet(ser):
     while True:
@@ -89,16 +87,16 @@ def read_packet(ser):
             continue
 
         # Unpack payload (firmware sends little-endian raw struct bytes)
-        depth, temp_scaled, vDrv_scaled = struct.unpack("<HhH", payload[:6])
+        depth, freq_scaled, vDrv_scaled = struct.unpack("<HhH", payload[:6])
         depth = min(depth, NUM_SAMPLES)
 
         sample_bytes = payload[6:6+NUM_SAMPLES]
         values = np.frombuffer(sample_bytes, dtype=np.uint8, count=NUM_SAMPLES)
 
-        temperature = temp_scaled / 100.0
+        drive_frequency = freq_scaled
         drive_voltage = float(vDrv_scaled)
 
-        return values, depth, temperature, drive_voltage
+        return values, depth, drive_frequency, drive_voltage
 
 
 def generate_dbt_sentence(depth_cm):
@@ -165,14 +163,7 @@ def sonar_display_pipeline(raw_line):
     depth_gain = np.linspace(1.0, TVG_STRENGTH, len(line))
     line *= depth_gain
 
-    # ---------- 5. Bottom lock（底線加粗） ----------
-    bottom_idx = np.argmax(line)
-    start = max(0, bottom_idx - BOTTOM_THICKNESS // 2)
-    end = min(len(line), bottom_idx + BOTTOM_THICKNESS // 2)
-
-    line[start:end] = np.clip(line[start:end] + BOTTOM_BOOST, 0, 255)
-
-    # ---------- 6. 輸出 ----------
+    # ---------- 5. 輸出 ----------
     return np.clip(line, 0, 255).astype(np.uint8)
 
 
@@ -198,12 +189,12 @@ class SerialReader(QThread):
                 while self.running:
                     result = read_packet(ser)
                     if result:
-                        values, depth, temperature, drive_voltage = result
-                        print(f"Depth: {depth}, Temp: {temperature}°C, Override: {drive_voltage}V")
+                        values, depth, drive_frequency, drive_voltage = result
+                        print(f"Depth: {depth}, Freq: {drive_frequency}kHz, Override: {drive_voltage}V")
                         # print(len(values))
 
                         self.data_received.emit(
-                            values, depth, temperature, drive_voltage
+                            values, depth, drive_frequency, drive_voltage
                         )
         except serial.SerialException as e:
             print(f"❌ Serial Error: {e}")
@@ -269,7 +260,7 @@ class UDPReader(QThread):
                             calc ^= b
                         if calc == checksum:
                             try:
-                                depth, temp_scaled, vDrv_scaled = struct.unpack("<HhH", payload[:6])
+                                depth, freq_scaled, vDrv_scaled = struct.unpack("<HhH", payload[:6])
                                 depth = min(depth, NUM_SAMPLES)
                                 sample_bytes = payload[6:6+NUM_SAMPLES]
                                 if len(sample_bytes) != NUM_SAMPLES:
@@ -277,9 +268,9 @@ class UDPReader(QThread):
                                     checksum_errors += 1
                                 else:
                                     values = np.frombuffer(sample_bytes, dtype=np.uint8, count=NUM_SAMPLES)
-                                    temperature = temp_scaled / 100.0
+                                    drive_frequency = freq_scaled / 100.0
                                     drive_voltage = float(vDrv_scaled)
-                                    self.data_received.emit(values, depth, temperature, drive_voltage)
+                                    self.data_received.emit(values, depth, drive_frequency, drive_voltage)
                                     packets_ok += 1
                                     # Skip the old emit below by continuing
                             except struct.error:
@@ -635,11 +626,11 @@ class WaterfallApp(QMainWindow):
         # Info labels
         info_layout = QHBoxLayout()
         self.depth_label = QLabel("Depth: --- cm")
-        self.temperature_label = QLabel("Temperature: --- °C")
-        self.drive_voltage_label = QLabel("vDRV: --- V")
+        self.freq_label = QLabel("Drive Frequency: --- kHz")
+        self.drive_voltage_label = QLabel("Override Idx: --- ")
 
         info_layout.addWidget(self.depth_label)
-        info_layout.addWidget(self.temperature_label)
+        info_layout.addWidget(self.freq_label)
         info_layout.addWidget(self.drive_voltage_label)
 
         info_container = QWidget()
@@ -825,7 +816,7 @@ class WaterfallApp(QMainWindow):
         else:
             print("⚠️ No active serial connection to disconnect")
 
-    def waterfall_plot_callback(self, spectrogram, depth_index, temperature, drive_voltage):
+    def waterfall_plot_callback(self, spectrogram, depth_index, drive_frequency, drive_voltage):
         filtered_line = sonar_display_pipeline(spectrogram)
         
         # 1. 更新瀑布圖數據
@@ -844,7 +835,7 @@ class WaterfallApp(QMainWindow):
         # 2. 計算深度
         depth_cm = depth_index * SAMPLE_RESOLUTION
         self.depth_label.setText(f"Depth: {depth_cm:.1f} cm | Index: {depth_index:.0f}")
-        self.temperature_label.setText(f"Temperature: {temperature:.1f} °C")
+        self.freq_label.setText(f"Drive Frequency: {drive_frequency:.1f} kHz")
         self.drive_voltage_label.setText(f"Override Idx: {drive_voltage:.0f} | Depth: {drive_voltage* SAMPLE_RESOLUTION:.0f} cm")
 
         # 3. 核心邏輯：判斷誤差並決定顏色與紅線顯示
