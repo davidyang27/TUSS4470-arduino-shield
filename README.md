@@ -11,7 +11,7 @@ If you have previously installed the dark theme module, please remove it first t
 # Remove old version
 pip uninstall -y pyqtdarktheme
 
-##2. Virtual Environment Management
+## 2. Virtual Environment Management
 Check your current directory for existing environments, then create and activate a new one.
 
 # Check existing folders
