@@ -34,7 +34,7 @@ PowerShell Execution Policy
 
 If you see the error:
 
-| running scripts is disabled on this system
+> running scripts is disabled on this system
 
 Run this command once:
 
