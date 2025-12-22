@@ -126,11 +126,13 @@ void setup() {
   // Initialize TUSS4470 with specific configurations
   // check TUSS4470 datasheet for more settings!
   tuss4470Write(0x10, FILTER_FREQUENCY_REGISTER);  // Set BPF center frequency
+  tuss4470Write(0x11, 0x10);                       // 設定 Q=5 提升魚探靈敏度
   tuss4470Write(0x16, 0xF);                        // Enable VDRV (not Hi-Z)
   tuss4470Write(0x1A, 0x0F);                       // Set burst pulses to 16
   tuss4470Write(0x17, THRESHOLD_VALUE);            // enable threshold detection on OUT_4
-  tuss4470Write(0x13, 0x01);                       // Set LNA gain (0x00 = 15V/V, 0x01 = 10V/V, 0x02 = 20V/V, 0x03 = 12.5V/V)
-
+  //tuss4470Write(0x13, 0x01);                       // Set LNA gain (0x00 = 15V/V, 0x01 = 10V/V, 0x02 = 20V/V, 0x03 = 12.5V/V)
+  //tuss4470Write(0x13, 0x05);                       // 修改後：0x05 (LNA 10V/V, VOUT 5.0V)
+  tuss4470Write(0x13, 0x06);
   // Set up ADC
   ADCSRA = (1 << ADEN) |  // Enable ADC
            (1 << ADPS2);  // Set prescaler to 16 (16 MHz / 16 = 1 MHz ADC clock)
@@ -192,25 +194,38 @@ void loop() {
 
   sendData(); // 呼叫 sendData
 
+  // --- 4. 核心：檢查來自 Python 的暫存器修改指令 ---
+  // 格式：'W' (1 byte) + Addr (1 byte) + Data (1 byte) = 總共 3 bytes
+  if (Serial.available() >= 3) {
+    if (Serial.read() == 'W') { // 檢查標頭
+      byte addr = Serial.read();
+      byte data = Serial.read();
+      
+      // 停止換能器以安全修改暫存器
+      stopTransducer(); 
+      tuss4470Write(addr, data);
+    }
+  }
+
   delay(10);
 }
 
 void sendData() {
   // Header fields
   frame.depth_index = depthDetectSample;
-  frame.temp_scaled = (int16_t)(temperature * 100.0f);
   
-  // 注意：這裡不要再寫 frame.vDrv_scaled = (vDrv * 100)，否則會覆蓋掉上面的 override 結果
-  // 保持 frame.vDrv_scaled 為 loop 中設定好的值
-
-  // Compute checksum
+  // 將 DRIVE_FREQUENCY (如 200000) 除以 1000 存入 temp_scaled (變為 200)
+  // 這樣 Python 接收到後乘回 1000 即可還原
+  frame.temp_scaled = (int16_t)(DRIVE_FREQUENCY / 1000); 
+  
+  // vDrv_scaled 維持 loop 中設定好的 overrideSample 邏輯
+  // ...其餘 checksum 程式碼保持不變...
+  
   frame.checksum = 0;
   frame.checksum ^= (uint8_t)(frame.depth_index & 0xFF);
   frame.checksum ^= (uint8_t)(frame.depth_index >> 8);
   frame.checksum ^= (uint8_t)(frame.temp_scaled & 0xFF);
   frame.checksum ^= (uint8_t)(frame.temp_scaled >> 8);
-  
-  // vDrv checksum (這裡會抓取到我們存入的 overrideSample)
   frame.checksum ^= (uint8_t)(frame.vDrv_scaled & 0xFF);
   frame.checksum ^= (uint8_t)(frame.vDrv_scaled >> 8);
 
