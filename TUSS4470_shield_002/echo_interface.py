@@ -253,7 +253,7 @@ class WaterfallApp(QMainWindow):
         self.current_speed = SPEED_OF_SOUND
 
         self.setWindowTitle("Open Echo Interface")
-        self.setGeometry(0, 0, 600, 850)
+        self.setGeometry(0, 0, 850, 850)
         self.data = np.zeros((MAX_ROWS, NUM_SAMPLES))
 
         central_widget = QWidget()
@@ -262,40 +262,73 @@ class WaterfallApp(QMainWindow):
         main_layout.setContentsMargins(15, 10, 15, 10)
         main_layout.setSpacing(10)
 
-        # [ Row 1 ] UDP (Left) & Serial Port (Right)
+        # [ Row 1 ] UDP (Left) & Serial Port (Right) 修正版
         row1_layout = QHBoxLayout()
-        row1_layout.addWidget(QLabel("UDP Port:"))
+        # --- 設定統一的字體大小 (您可以修改這裡的數字) ---
+        target_font_size = 10
+        row1_font = QFont("Arial", target_font_size)
+        # 如果想要粗體，可以加上這行: row1_font.setBold(True)
+        # ----------------------------------------------
+        # UDP 部分
+        label_udp = QLabel("UDP Port:")
+        label_udp.setFont(row1_font) # 套用字體
+        row1_layout.addWidget(label_udp)
         self.udp_port_input = QLineEdit("5005")
-        self.udp_port_input.setFixedWidth(60)
+        self.udp_port_input.setFixedWidth(80) # 稍微加寬以容納大字體
+        self.udp_port_input.setFont(row1_font) # 套用字體
         row1_layout.addWidget(self.udp_port_input)
         self.udp_connect_button = QPushButton("Connect UDP")
+        self.udp_connect_button.setFont(row1_font) # 套用字體
         self.udp_connect_button.clicked.connect(self.toggle_udp_connection)
         row1_layout.addWidget(self.udp_connect_button)
-        row1_layout.addStretch()
-        row1_layout.addWidget(QLabel("Port:"))
+        row1_layout.addStretch() # 彈簧推向右邊
+        # Serial 部分
+        label_serial = QLabel("Port:")
+        label_serial.setFont(row1_font) # 套用字體
+        row1_layout.addWidget(label_serial)
         self.serial_dropdown = QComboBox()
         self.serial_dropdown.addItems(get_serial_ports())
-        self.serial_dropdown.setFixedWidth(100)
+        self.serial_dropdown.setFixedWidth(150) # 稍微加寬以容納大字體
+        self.serial_dropdown.setFont(row1_font) # 套用字體
         row1_layout.addWidget(self.serial_dropdown)
         self.connect_button = QPushButton("Connect")
+        self.connect_button.setFont(row1_font) # 套用字體
         self.connect_button.clicked.connect(self.toggle_serial_connection)
         row1_layout.addWidget(self.connect_button)
         main_layout.addLayout(row1_layout)
 
         # [ Row 2 ] Echogram with Floating Depth Overlay
         self.waterfall = pg.PlotWidget()
+        #self.waterfall.setContentsMargins(0, 0, 0, 20) # 左, 上, 右, 下
         self.imageitem = pg.ImageItem(axisOrder="row-major")
         self.waterfall.addItem(self.imageitem)
         self.waterfall.invertY(True)
+        # 深度大字 (保持您之前的設定)
         self.depth_overlay = pg.TextItem(text="--- m", color=(255, 255, 255), anchor=(0, 1))
-        font = QFont("Arial", 60, QFont.Bold)
-        self.depth_overlay.setFont(font)
+        f_overlay = QFont("Arial", 60, QFont.Bold)
+        self.depth_overlay.setFont(f_overlay)
         self.waterfall.addItem(self.depth_overlay)
-        
+        # 設定 X 軸刻度字體 (可跟隨 Y 軸或獨立設定)
+        x_axis = self.waterfall.getAxis("bottom")
+        # 強制設定 X 軸的高度，確保大字體有足夠空間顯示
+        x_axis.setHeight(40) 
+        x_tick_font = QFont("Arial", 10) 
+        self.waterfall.getAxis("bottom").setTickFont(x_tick_font)
+        # --- 動態計算 Y 軸座標字體大小 ---
+        # 取得刻度總數
+        num_ticks = len(depth_labels)
+        # 定義基礎字體大小邏輯：
+        # 假設刻度少於 5 個時使用 18 號字，多於 20 個時縮小到 10 號字
+        dynamic_tick_size = int(18 - (num_ticks - 5) * (8 / 15))
+        tick_font = QFont("Arial", dynamic_tick_size)
+        self.waterfall.getAxis("left").setTickFont(tick_font)
+        self.waterfall.getAxis("right").setTickFont(tick_font)
+        # -----------------------------
         inverted_depth_labels = list(depth_labels.items())[::-1]
         self.waterfall.getAxis("left").setTicks([inverted_depth_labels])
         self.waterfall.getAxis("right").setTicks([inverted_depth_labels])
         self.waterfall.getAxis("right").setStyle(showValues=True)
+        # 繪製紅線與參考線
         self.depth_line = pg.InfiniteLine(angle=0, pen=pg.mkPen("r", width=2))
         self.waterfall.addItem(self.depth_line)
         for i in range(0, int(MAX_DEPTH), Y_LABEL_DISTANCE):
@@ -309,9 +342,9 @@ class WaterfallApp(QMainWindow):
         row4_layout.setSpacing(30)
         self.depth_label = QLabel("Depth: --- cm")
         self.freq_label = QLabel("Drive Frequency: --- kHz")
-        self.drive_voltage_label = QLabel("Override Idx: ---")
-        info_style = "font-size: 14px; color: #ffffff; font-weight: bold;"
-        for lbl in [self.depth_label, self.freq_label, self.drive_voltage_label]:
+        self.override_idx_label = QLabel("Override Idx: ---")
+        info_style = "font-size: 20px; color: #ffffff; font-weight: bold;"
+        for lbl in [self.depth_label, self.freq_label, self.override_idx_label]:
             lbl.setStyleSheet(info_style)
             row4_layout.addWidget(lbl)
         row4_layout.addStretch()
@@ -319,48 +352,64 @@ class WaterfallApp(QMainWindow):
 
         # [ Row 5 ] Commands & Buttons
         row5_layout = QHBoxLayout()
+        row5_layout.setSpacing(10)
+        row5_font = QFont("Arial", target_font_size) 
+        #row5_font.setBold(True) # 如果字很大，粗體會更清晰
+        # 指令輸入框
         self.hex_input = QLineEdit()
         self.hex_input.setPlaceholderText("Addr, Data")
-        self.hex_input.setFixedWidth(200)
+        self.hex_input.setFixedWidth(250) # 增加寬度以容納大字體
+        self.hex_input.setFont(row5_font)
         row5_layout.addWidget(self.hex_input)
+        # Send 按鈕
         self.send_button = QPushButton("Send")
+        self.send_button.setFont(row5_font)
         self.send_button.clicked.connect(self.send_hex_value)
         row5_layout.addWidget(self.send_button)
         row5_layout.addStretch()
+        # Settings 按鈕
         self.settings_button = QPushButton("Settings")
+        self.settings_button.setFont(row5_font)
         self.settings_button.clicked.connect(self.open_settings)
         row5_layout.addWidget(self.settings_button)
+        # Quit 按鈕
         self.quit_button = QPushButton("Quit")
+        self.quit_button.setFont(row5_font)
         self.quit_button.clicked.connect(self.close)
         row5_layout.addWidget(self.quit_button)
         main_layout.addLayout(row5_layout)
-
+        # Colorbar 與數據範圍設定保持不變
         self.colorbar = pg.HistogramLUTWidget()
         self.colorbar.setImageItem(self.imageitem)
         self.colorbar.item.gradient.loadPreset("cyclic") 
         self.imageitem.setLevels(DEFAULT_LEVELS)
 
-    def waterfall_plot_callback(self, spectrogram, depth_index, drive_frequency, drive_voltage):
+    def waterfall_plot_callback(self, spectrogram, depth_index, drive_frequency, override_idx):
         filtered_line = sonar_display_pipeline(spectrogram)
         self.data = np.roll(self.data, -1, axis=0)
         self.data[-1, :] = filtered_line
         self.imageitem.setImage(self.data.T, autoLevels=False)
         self.imageitem.setLevels((10, 220))
         depth_m = (depth_index * SAMPLE_RESOLUTION) / 100.0
-        self.depth_overlay.setText(f"{depth_m:.1f} m")
+        ovrride_depth_m = (override_idx * SAMPLE_RESOLUTION) / 100.0
+        
         self.depth_overlay.setPos(10, NUM_SAMPLES)
-        self.depth_label.setText(f"Depth: {depth_m*100:.1f} cm | Index: {depth_index:.0f}")
         self.freq_label.setText(f"Drive Frequency: {drive_frequency:.1f} kHz")
-        self.drive_voltage_label.setText(f"Override Idx: {drive_voltage:.0f}")
-        index_diff = abs(depth_index - drive_voltage)
+
+        self.depth_label.setText(f"Depth: {depth_m*100:.1f} cm ({depth_index:.0f})")
+        self.override_idx_label.setText(f"Override depth: {ovrride_depth_m*100:.1f} cm ({override_idx:.0f})")
+        
+        index_diff = abs(depth_index - override_idx)
         if index_diff <= INDEX_TOLERANCE:
             self.depth_line.setPos(depth_index)
             self.depth_line.show()
             self.depth_line.setPen(pg.mkPen((255, 0, 0), width=3))
             self.depth_overlay.setColor((255, 255, 255))
+            self.depth_overlay.setText(f"{depth_m:.1f} m")
         else:
             self.depth_line.setPen(pg.mkPen((255, 0, 0, 120), width=2))
             self.depth_overlay.setColor((255, 100, 100))
+            self.depth_overlay.setText("0.0 m")
 
     def toggle_serial_connection(self):
         if self.serial_thread and self.serial_thread.isRunning():
@@ -402,10 +451,21 @@ class WaterfallApp(QMainWindow):
         SPEED_OF_SOUND = self.current_speed = speed
         SAMPLE_RESOLUTION = (SPEED_OF_SOUND * SAMPLE_TIME * 100) / 2
         MAX_DEPTH = NUM_SAMPLES * SAMPLE_RESOLUTION
+        # 1. 重新計算刻度標籤
         depth_labels = {int(i / SAMPLE_RESOLUTION): f"{i / 100}" for i in range(0, int(MAX_DEPTH), Y_LABEL_DISTANCE)}
         inverted = list(depth_labels.items())[::-1]
-        self.waterfall.getAxis("left").setTicks([inverted])
-        self.waterfall.getAxis("right").setTicks([inverted])
+        # 2. 根據新的刻度數量計算字體大小
+        num_ticks = len(depth_labels)
+        # 線性計算：刻度越多字越小 (從 18 降到 10)
+        dynamic_size = int(18 - (num_ticks - 5) * (8 / 15))
+        tick_font = QFont("Arial", dynamic_size)
+        # 3. 更新 Y 軸刻度內容與字體大小
+        left_axis = self.waterfall.getAxis("left")
+        right_axis = self.waterfall.getAxis("right")
+        left_axis.setTickFont(tick_font)
+        right_axis.setTickFont(tick_font)
+        left_axis.setTicks([inverted])
+        right_axis.setTicks([inverted])
 
     def configure_nmea_output(self, enabled, port):
         self.nmea_output_enabled, self.nmea_port = enabled, port
