@@ -173,13 +173,14 @@ class SettingsDialog(QDialog):
         super().__init__(parent)
         self.main_app = parent
         self.setWindowTitle("Chart Settings")
-        self.setFixedSize(360, 450)
+        self.setFixedSize(360, 580) # 再增加一點高度
 
         main_layout = QVBoxLayout(self)
         
-        # Appearance
+        # --- Appearance ---
         appearance_group = QWidget()
         appearance_layout = QFormLayout(appearance_group)
+        # ... (原本的 Color Map 和 Sound Speed 保持不變) ...
         self.gradient_dropdown = QComboBox()
         self.gradient_dropdown.addItems(["viridis", "plasma", "inferno", "magma", "thermal", "flame", "yellowy", "bipolar", "spectrum", "cyclic", "greyclip", "grey"])
         self.gradient_dropdown.setCurrentText(current_gradient)
@@ -191,12 +192,44 @@ class SettingsDialog(QDialog):
         main_layout.addWidget(QLabel("<b>Appearance</b>"))
         main_layout.addWidget(appearance_group)
 
-        # Display Options
-        self.large_depth_checkbox = QCheckBox("Show Floating Depth Overlay")
-        self.large_depth_checkbox.setChecked(getattr(parent, "large_depth_visible", True))
-        main_layout.addWidget(self.large_depth_checkbox)
+        # --- Display Options (更新部分) ---
+        main_layout.addWidget(QLabel("<b>Display Options</b>"))
+        display_group = QWidget()
+        display_layout = QFormLayout(display_group)
 
-        # NMEA Section
+        # 1. Overlay 設定
+        self.large_depth_checkbox = QCheckBox("Enable Depth Overlay")
+        self.large_depth_checkbox.setChecked(self.main_app.large_depth_visible)
+        
+        self.overlay_mode_combo = QComboBox()
+        self.overlay_mode_combo.addItems(["Auto (Threshold)", "Override (Max)"])
+        self.overlay_mode_combo.setCurrentIndex(0 if self.main_app.depth_overlay_mode == "Auto" else 1)
+        
+        # 2. 紅線設定
+        self.show_line_checkbox = QCheckBox("Show Red Depth Line")
+        self.show_line_checkbox.setChecked(self.main_app.show_depth_line)
+
+        self.line_mode_combo = QComboBox() # 新增：紅線模式選單
+        self.line_mode_combo.addItems(["Follow Auto", "Follow Override"])
+        self.line_mode_combo.setCurrentIndex(0 if self.main_app.depth_line_mode == "Auto" else 1)
+
+        display_layout.addRow(self.large_depth_checkbox)
+        display_layout.addRow("Overlay Source:", self.overlay_mode_combo)
+        display_layout.addRow(QFrame()) # 分隔線感
+        display_layout.addRow(self.show_line_checkbox)
+        display_layout.addRow("Line Follow Mode:", self.line_mode_combo)
+        
+        # 連動控制
+        self.large_depth_checkbox.toggled.connect(self.overlay_mode_combo.setEnabled)
+        self.show_line_checkbox.toggled.connect(self.line_mode_combo.setEnabled)
+        
+        self.overlay_mode_combo.setEnabled(self.main_app.large_depth_visible)
+        self.line_mode_combo.setEnabled(self.main_app.show_depth_line)
+
+        main_layout.addWidget(display_group)
+
+        # --- NMEA Section ---
+        # ... (原本的 NMEA 區塊保持不變) ...
         nmea_group = QWidget()
         nmea_layout = QFormLayout(nmea_group)
         self.nmea_enable_checkbox = QCheckBox("Enable NMEA TCP Output")
@@ -210,7 +243,7 @@ class SettingsDialog(QDialog):
         main_layout.addWidget(QLabel("<b>NMEA Output</b>"))
         main_layout.addWidget(nmea_group)
 
-        # Buttons
+        # --- Buttons ---
         button_row = QHBoxLayout()
         apply_btn = QPushButton("Apply")
         apply_btn.clicked.connect(self.apply_settings)
@@ -225,17 +258,24 @@ class SettingsDialog(QDialog):
         self.setStyleSheet("QWidget { background-color: #2b2b2b; color: white; } QComboBox, QLineEdit { background-color: #3c3c3c; color: white; padding: 4px; } QPushButton { background-color: #444; border: 1px solid #666; padding: 6px 14px; border-radius: 4px; }")
 
     def apply_settings(self):
-        gradient = self.gradient_dropdown.currentText()
-        speed = 343 if self.speed_dropdown.currentIndex() == 0 else 1440
-        nmea_enabled = self.nmea_enable_checkbox.isChecked()
-        port = int(self.port_input.text()) if self.port_input.text().isdigit() else 10110
-        
+        # ... (讀取其他設定) ...
         if self.main_app:
-            self.main_app.set_gradient(gradient)
-            self.main_app.set_sound_speed(speed)
+            self.main_app.set_gradient(self.gradient_dropdown.currentText())
+            self.main_app.set_sound_speed(343 if self.speed_dropdown.currentIndex() == 0 else 1440)
+            
+            # 套用 Overlay 設定
             self.main_app.large_depth_visible = self.large_depth_checkbox.isChecked()
             self.main_app.depth_overlay.setVisible(self.main_app.large_depth_visible)
-            self.main_app.configure_nmea_output(enabled=nmea_enabled, port=port)
+            self.main_app.depth_overlay_mode = "Auto" if self.overlay_mode_combo.currentIndex() == 0 else "Override"
+            
+            # 套用紅線設定
+            self.main_app.show_depth_line = self.show_line_checkbox.isChecked()
+            self.main_app.depth_line_mode = "Auto" if self.line_mode_combo.currentIndex() == 0 else "Override"
+            
+            if not self.main_app.show_depth_line:
+                self.main_app.depth_line.hide()
+
+            self.main_app.configure_nmea_output(enabled=self.nmea_enable_checkbox.isChecked(), port=int(self.port_input.text()))
         self.close()
 
 # --- Main App ---
@@ -251,6 +291,11 @@ class WaterfallApp(QMainWindow):
         self.large_depth_visible = True
         self.current_gradient = 'cyclic' 
         self.current_speed = SPEED_OF_SOUND
+        self.large_depth_visible = True
+        self.depth_overlay_mode = "Auto"  # 可選 "Auto" (depth_m) 或 "Override" (ovrride_depth_m)
+        self.show_depth_line = True      # 控制紅色水平線開關
+        self.depth_line_mode = "Auto" # 可選 "Auto" (depth_m) 或 "Override" (ovrride_depth_m)
+        
 
         self.setWindowTitle("Open Echo Interface")
         self.setGeometry(0, 0, 850, 850)
@@ -385,31 +430,78 @@ class WaterfallApp(QMainWindow):
         self.imageitem.setLevels(DEFAULT_LEVELS)
 
     def waterfall_plot_callback(self, spectrogram, depth_index, drive_frequency, override_idx):
+        """
+        處理聲納數據回傳的 callback 函式。
+        包含：瀑布圖更新、浮動文字顯示邏輯、以及水平紅線追蹤邏輯。
+        """
+        # 1. 影像處理與瀑布圖滾動更新
         filtered_line = sonar_display_pipeline(spectrogram)
         self.data = np.roll(self.data, -1, axis=0)
         self.data[-1, :] = filtered_line
         self.imageitem.setImage(self.data.T, autoLevels=False)
-        self.imageitem.setLevels((10, 220))
+        self.imageitem.setLevels((10, 220)) # 設定顯示色階範圍
+        
+        # 2. 深度數據計算 (單位：公尺)
         depth_m = (depth_index * SAMPLE_RESOLUTION) / 100.0
         ovrride_depth_m = (override_idx * SAMPLE_RESOLUTION) / 100.0
         
-        self.depth_overlay.setPos(10, NUM_SAMPLES)
-        self.freq_label.setText(f"Drive Frequency: {drive_frequency:.1f} kHz")
-
-        self.depth_label.setText(f"Depth: {depth_m*100:.1f} cm ({depth_index:.0f})")
-        self.override_idx_label.setText(f"Override depth: {ovrride_depth_m*100:.1f} cm ({override_idx:.0f})")
-        
+        # 3. 計算誤差 (判斷 Auto 偵測是否與 Override 吻合)
         index_diff = abs(depth_index - override_idx)
-        if index_diff <= INDEX_TOLERANCE:
-            self.depth_line.setPos(depth_index)
+        is_valid = index_diff <= INDEX_TOLERANCE
+        
+        # 4. --- 處理水平紅線 (Depth Line) 邏輯 ---
+        if self.show_depth_line:
+            # 決定紅線要追蹤哪一個數值
+            if self.depth_line_mode == "Auto":
+                target_idx = depth_index
+            else:
+                target_idx = override_idx
+            
+            self.depth_line.setPos(target_idx) # 設定線條在 Y 軸的位置
             self.depth_line.show()
-            self.depth_line.setPen(pg.mkPen((255, 0, 0), width=3))
-            self.depth_overlay.setColor((255, 255, 255))
-            self.depth_overlay.setText(f"{depth_m:.1f} m")
+            
+            # 視覺反饋：如果追蹤 Auto 且數據不穩，將線條變淡變細
+            if self.depth_line_mode == "Auto" and not is_valid:
+                self.depth_line.setPen(pg.mkPen((255, 0, 0, 120), width=2)) # 半透明紅
+            else:
+                self.depth_line.setPen(pg.mkPen((255, 0, 0), width=3))      # 實心亮紅
         else:
-            self.depth_line.setPen(pg.mkPen((255, 0, 0, 120), width=2))
-            self.depth_overlay.setColor((255, 100, 100))
-            self.depth_overlay.setText("0.0 m")
+            self.depth_line.hide() # 在設定中關閉紅線時隱藏
+
+        # 5. --- 處理浮動深度文字 (Depth Overlay) 邏輯 ---
+        if self.large_depth_visible:
+            # 決定 Overlay 要顯示哪一個數值
+            display_val = depth_m if self.depth_overlay_mode == "Auto" else ovrride_depth_m
+            
+            # 更新位置 (固定在左下角，座標 10, NUM_SAMPLES)
+            self.depth_overlay.setPos(10, NUM_SAMPLES)
+            
+            if is_valid:
+                # 數據吻合：顯示白色
+                self.depth_overlay.setColor((255, 255, 255))
+                self.depth_overlay.setText(f"{display_val:.1f} m")
+            else:
+                # 數據異常：顯示淡紅色警告
+                self.depth_overlay.setColor((255, 100, 100))
+                if self.depth_overlay_mode == "Auto":
+                    self.depth_overlay.setText("0.0 m") # Auto 模式在警告時顯示 0.0
+                else:
+                    self.depth_overlay.setText(f"{display_val:.1f} m") # Override 模式則維持原值
+        
+        # 6. 更新介面底部的狀態標籤 (QLabel)
+        self.freq_label.setText(f"Drive Frequency: {drive_frequency:.1f} kHz")
+        self.depth_label.setText(f"Depth: {depth_m*100:.1f} cm ({depth_index:.0f})")
+        self.override_idx_label.setText(f"Override Depth: {ovrride_depth_m*100:.1f} cm ({override_idx:.0f})")
+
+        # 7. NMEA 輸出 (如果功能啟動且 Socket 已連線)
+        if self.nmea_output_enabled and hasattr(self, 'nmea_client_socket') and self.nmea_client_socket:
+            try:
+                # 輸出當前回波深度至 NMEA 客戶端
+                sentence = self.generate_dbt_sentence(depth_m * 100)
+                self.nmea_client_socket.send(sentence.encode())
+            except Exception:
+                # 若傳送失敗，關閉 NMEA 輸出狀態
+                self.nmea_output_enabled = False
 
     def toggle_serial_connection(self):
         if self.serial_thread and self.serial_thread.isRunning():
