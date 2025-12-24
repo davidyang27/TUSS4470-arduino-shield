@@ -9,7 +9,7 @@ import queue
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QVBoxLayout, QWidget, QComboBox, 
     QPushButton, QLabel, QLineEdit, QHBoxLayout, QCheckBox, 
-    QDialog, QFormLayout, QFrame
+    QDialog, QFormLayout, QFrame, QSizePolicy
 )
 from PyQt5.QtCore import QThread, pyqtSignal, Qt
 from PyQt5.QtGui import QPalette, QColor, QFont
@@ -33,7 +33,7 @@ DEFAULT_LEVELS = (0, 256)
 
 SPEED_OF_SOUND = AIR_SPEED if DEFAULT_ENVIRONMENT == 'AIR' else WATER_SPEED 
 SAMPLE_RESOLUTION = (SPEED_OF_SOUND * SAMPLE_TIME * 100) / 2
-PACKET_SIZE = 1 + 6 + NUM_SAMPLES + 1  # header + payload + checksum
+PACKET_SIZE = 1 + 6 + NUM_SAMPLES + 1
 MAX_DEPTH = NUM_SAMPLES * SAMPLE_RESOLUTION
 depth_labels = {int(i / SAMPLE_RESOLUTION): f"{i / 100}" for i in range(0, int(MAX_DEPTH), Y_LABEL_DISTANCE)}
 
@@ -138,11 +138,11 @@ class SettingsDialog(QDialog):
         self.main_app = parent
         self.setWindowTitle("Chart Settings")
         self.setFixedSize(380, 680)
+        self.setStyleSheet("QDialog { background-color: black; color: white; } QWidget { background-color: black; color: white; } QComboBox, QLineEdit { background-color: #222; border: 1px solid #444; } QPushButton { background-color: #333; border: 1px solid #555; }")
 
         main_layout = QVBoxLayout(self)
         main_layout.addWidget(QLabel("<b>Environment & Appearance</b>"))
-        app_group = QWidget()
-        app_layout = QFormLayout(app_group)
+        app_group = QWidget(); app_layout = QFormLayout(app_group)
         self.speed_dropdown = QComboBox()
         self.speed_dropdown.addItems([f"{AIR_SPEED} m/s (Air)", f"{WATER_SPEED} m/s (Water)"])
         self.speed_dropdown.setCurrentIndex(1 if current_speed == WATER_SPEED else 0)
@@ -154,35 +154,26 @@ class SettingsDialog(QDialog):
         main_layout.addWidget(app_group)
 
         main_layout.addWidget(QLabel("<b>Display Options</b>"))
-        disp_group = QWidget()
-        disp_layout = QFormLayout(disp_group)
-        self.large_depth_checkbox = QCheckBox("Enable Depth Overlay")
-        self.large_depth_checkbox.setChecked(self.main_app.large_depth_visible)
-        self.overlay_mode_combo = QComboBox()
-        self.overlay_mode_combo.addItems(["Auto (Threshold)", "Override (Max)"])
+        disp_group = QWidget(); disp_layout = QFormLayout(disp_group)
+        self.large_depth_checkbox = QCheckBox("Enable Depth Overlay"); self.large_depth_checkbox.setChecked(self.main_app.large_depth_visible)
+        self.overlay_mode_combo = QComboBox(); self.overlay_mode_combo.addItems(["Auto (Threshold)", "Override (Max)"])
         self.overlay_mode_combo.setCurrentIndex(0 if self.main_app.depth_overlay_mode == "Auto" else 1)
-        self.show_line_checkbox = QCheckBox("Show Red Depth Line")
-        self.show_line_checkbox.setChecked(self.main_app.show_depth_line)
-        self.line_mode_combo = QComboBox()
-        self.line_mode_combo.addItems(["Follow Auto", "Follow Override"])
+        self.show_line_checkbox = QCheckBox("Show Red Depth Line"); self.show_line_checkbox.setChecked(self.main_app.show_depth_line)
+        self.line_mode_combo = QComboBox(); self.line_mode_combo.addItems(["Follow Auto", "Follow Override"])
         self.line_mode_combo.setCurrentIndex(0 if self.main_app.depth_line_mode == "Auto" else 1)
-        disp_layout.addRow(self.large_depth_checkbox)
-        disp_layout.addRow("Overlay Source:", self.overlay_mode_combo)
-        disp_layout.addRow(self.show_line_checkbox)
-        disp_layout.addRow("Line Follow Mode:", self.line_mode_combo)
+        disp_layout.addRow(self.large_depth_checkbox); disp_layout.addRow("Overlay Source:", self.overlay_mode_combo)
+        disp_layout.addRow(self.show_line_checkbox); disp_layout.addRow("Line Follow Mode:", self.line_mode_combo)
         main_layout.addWidget(disp_group)
 
         main_layout.addWidget(QLabel("<b>Register Write (Hex)</b>"))
-        reg_group = QWidget()
-        reg_layout = QHBoxLayout(reg_group)
+        reg_group = QWidget(); reg_layout = QHBoxLayout(reg_group)
         self.reg_input = QLineEdit(); self.reg_input.setPlaceholderText("Addr, Data")
         self.reg_btn = QPushButton("Send"); self.reg_btn.clicked.connect(self.handle_reg_send)
         reg_layout.addWidget(self.reg_input); reg_layout.addWidget(self.reg_btn)
         main_layout.addWidget(reg_group)
 
         main_layout.addWidget(QLabel("<b>NMEA Output</b>"))
-        nmea_group = QWidget()
-        nmea_layout = QFormLayout(nmea_group)
+        nmea_group = QWidget(); nmea_layout = QFormLayout(nmea_group)
         self.nmea_checkbox = QCheckBox("Enable NMEA TCP Output"); self.nmea_checkbox.setChecked(nmea_enabled)
         self.port_input = QLineEdit(str(nmea_port))
         nmea_layout.addRow("Enable:", self.nmea_checkbox); nmea_layout.addRow("TCP Port:", self.port_input)
@@ -192,7 +183,6 @@ class SettingsDialog(QDialog):
         apply_btn = QPushButton("Apply"); apply_btn.clicked.connect(self.handle_apply)
         btn_layout.addStretch(); btn_layout.addWidget(apply_btn); btn_layout.addWidget(QPushButton("Cancel", clicked=self.close))
         main_layout.addStretch(); main_layout.addLayout(btn_layout)
-        self.setStyleSheet("QWidget { background-color: #2b2b2b; color: white; } QComboBox, QLineEdit { background-color: #3c3c3c; padding: 4px; } QPushButton { background-color: #444; padding: 6px 14px; border-radius: 4px; }")
 
     def handle_reg_send(self):
         txt = self.reg_input.text().strip()
@@ -229,70 +219,84 @@ class WaterfallApp(QMainWindow):
         self.current_speed = SPEED_OF_SOUND 
 
         self.setWindowTitle("Open Echo Interface")
-        self.setGeometry(0, 0, 850, 850)
+        self.setGeometry(0, 0, 1100, 750)
+        self.setStyleSheet("QMainWindow { background-color: black; } QWidget { background-color: black; color: white; } QComboBox, QLineEdit { background-color: #222; border: 1px solid #444; } QPushButton { background-color: #333; border: 1px solid #555; }")
+
         self.data = np.zeros((MAX_ROWS, NUM_SAMPLES))
-
         central = QWidget(); self.setCentralWidget(central)
-        main_layout = QVBoxLayout(central); main_layout.setContentsMargins(15, 10, 15, 10); main_layout.setSpacing(10)
+        main_layout = QHBoxLayout(central); main_layout.setContentsMargins(10, 10, 10, 10); main_layout.setSpacing(15)
 
-        row1 = QHBoxLayout(); font1 = QFont("Arial", 10)
-        row1.addWidget(QLabel("UDP Port:"))
-        self.udp_input = QLineEdit("5005"); self.udp_input.setFixedWidth(60); self.udp_input.setFont(font1); row1.addWidget(self.udp_input)
-        self.udp_conn_btn = QPushButton("Connect UDP"); self.udp_conn_btn.setFont(font1); self.udp_conn_btn.clicked.connect(self.toggle_udp_connection); row1.addWidget(self.udp_conn_btn)
-        row1.addStretch()
-        row1.addWidget(QLabel("Port:"))
-        self.serial_combo = QComboBox(); self.serial_combo.setFixedWidth(120); self.serial_combo.setFont(font1); self.serial_combo.addItems(get_serial_ports()); row1.addWidget(self.serial_combo)
-        self.conn_btn = QPushButton("Connect"); self.conn_btn.setFont(font1); self.conn_btn.clicked.connect(self.toggle_serial_connection); row1.addWidget(self.conn_btn)
-        main_layout.addLayout(row1)
-
-        # ============================================================
-        # [ Row 2 ] Echogram 調整 - 徹底內置 Y 軸
-        # ============================================================
-        self.waterfall = pg.PlotWidget()
+        # ------------------ 左側：聲納圖 ------------------
+        self.waterfall = pg.PlotWidget(background='k')
         
-        # 修正 1：徹底移除 ViewBox 邊距
-        vb = self.waterfall.getViewBox()
-        vb.setDefaultPadding(0)
+        # 使用預設的 Padding，確保座標軸不會被切掉
+        # 移除 setDefaultPadding(0) 以避免邊界裁切問題
         
-        # 修正 2：將 Y 軸設定為右側，並限制其佔用空間
+        # 設定軸的顯示：右側顯示，左/下隱藏
         self.waterfall.showAxis('right')
         self.waterfall.hideAxis('left')
-        self.waterfall.hideAxis('bottom') # 隱藏 X 軸
+        self.waterfall.hideAxis('bottom')
         
+        # --- 穩定的 Y 軸設定 ---
         y_right = self.waterfall.getAxis('right')
-        y_right.setStyle(showValues=True, tickLength=-10) # 刻度朝內指向圖內
-        y_right.setZValue(10) # 讓數字層級高於影像，避免被遮擋
-        y_right.setWidth(40)  # 設定固定寬度以解決 Y 軸消失問題
-        
+        # 1. 強制設定足夠的寬度，讓數字顯示在圖表外側 (External)
+        y_right.setWidth(60) 
+        # 2. 回歸標準樣式：顯示數值，正常刻度方向
+        y_right.setStyle(showValues=True)
+        # 3. 確保文字顏色為亮白
+        y_right.setTextPen(pg.mkPen(color='w'))
+        y_right.setPen(pg.mkPen(color=(100,100,100))) # 軸線設為深灰色
+
         self.imageitem = pg.ImageItem(axisOrder="row-major")
         self.waterfall.addItem(self.imageitem)
         self.waterfall.invertY(True)
         
-        # 深度大字
+        # 深度大字 Overlay
         self.depth_overlay = pg.TextItem(text="--- m", color=(255, 255, 255), anchor=(0, 1))
         self.depth_overlay.setFont(QFont("Arial", 60, QFont.Bold))
-        self.depth_overlay.setZValue(100) # 確保大字在最最上層
+        self.depth_overlay.setZValue(200)
         self.waterfall.addItem(self.depth_overlay)
         
-        self.set_sound_speed(self.current_speed) 
-        
+        self.set_sound_speed(self.current_speed)
         self.depth_line = pg.InfiniteLine(angle=0, pen=pg.mkPen("r", width=2))
-        self.depth_line.setZValue(50) # 讓紅線在影像上方，文字下方
+        self.depth_line.setZValue(50)
         self.waterfall.addItem(self.depth_line)
         
-        main_layout.addWidget(self.waterfall, stretch=1)
+        main_layout.addWidget(self.waterfall, stretch=5)
 
-        # Row 4 & 5 其他不變
-        row4 = QHBoxLayout(); info_style = "font-size: 18px; color: white; font-weight: bold;"
+        # ------------------ 右側：控制面板 ------------------
+        side_panel = QFrame(); side_panel.setFixedWidth(240); side_layout = QVBoxLayout(side_panel)
+        side_layout.setSpacing(15)
+
+        side_layout.addWidget(QLabel("<b>CONNECTION</b>"))
+        udp_form = QFormLayout(); self.udp_input = QLineEdit("5005")
+        udp_form.addRow("UDP Port:", self.udp_input); side_layout.addLayout(udp_form)
+        self.udp_btn = QPushButton("Connect UDP"); self.udp_btn.clicked.connect(self.toggle_udp_connection); side_layout.addWidget(self.udp_btn)
+
+        side_layout.addWidget(QFrame(frameShape=QFrame.HLine, frameShadow=QFrame.Sunken))
+
+        ser_form = QFormLayout(); self.serial_combo = QComboBox(); self.serial_combo.addItems(get_serial_ports())
+        ser_form.addRow("Port:", self.serial_combo); side_layout.addLayout(ser_form)
+        self.conn_btn = QPushButton("Connect Serial"); self.conn_btn.clicked.connect(self.toggle_serial_connection); side_layout.addWidget(self.conn_btn)
+
+        side_layout.addStretch()
+
+        side_layout.addWidget(QLabel("<b>STATUS</b>"))
+        status_frame = QFrame(); status_frame.setStyleSheet("background-color: #111; border-radius: 4px; padding: 5px;")
+        status_vbox = QVBoxLayout(status_frame)
         self.depth_lbl = QLabel("Depth: --- cm"); self.freq_lbl = QLabel("Freq: --- kHz"); self.ovr_lbl = QLabel("Override: ---")
-        for lbl in [self.depth_lbl, self.freq_lbl, self.ovr_lbl]: lbl.setStyleSheet(info_style); row4.addWidget(lbl)
-        row4.addStretch(); main_layout.addLayout(row4)
+        info_style = "font-size: 14px; color: #00ff00; font-family: 'Consolas';"
+        for lbl in [self.depth_lbl, self.freq_lbl, self.ovr_lbl]: lbl.setStyleSheet(info_style); status_vbox.addWidget(lbl)
+        side_layout.addWidget(status_frame)
 
-        row5 = QHBoxLayout(); font5 = QFont("Arial", 10)
-        self.set_btn = QPushButton("Settings"); self.set_btn.setFont(font5); self.set_btn.clicked.connect(self.open_settings); row5.addWidget(self.set_btn)
-        row5.addStretch()
-        self.quit_btn = QPushButton("Quit"); self.quit_btn.setFont(font5); self.quit_btn.clicked.connect(self.close); row5.addWidget(self.quit_btn)
-        main_layout.addLayout(row5)
+        side_layout.addStretch()
+
+        self.set_btn = QPushButton("Settings"); self.set_btn.setMinimumHeight(40); self.set_btn.clicked.connect(self.open_settings)
+        side_layout.addWidget(self.set_btn)
+        self.quit_btn = QPushButton("Quit"); self.quit_btn.setMinimumHeight(40); self.quit_btn.setStyleSheet("background-color: #522;"); self.quit_btn.clicked.connect(self.close)
+        side_layout.addWidget(self.quit_btn)
+
+        main_layout.addWidget(side_panel)
 
         self.colorbar = pg.HistogramLUTWidget(); self.colorbar.setImageItem(self.imageitem)
         self.colorbar.item.gradient.loadPreset("cyclic"); self.imageitem.setLevels(DEFAULT_LEVELS)
@@ -301,9 +305,7 @@ class WaterfallApp(QMainWindow):
         filtered = sonar_display_pipeline(spectrogram)
         self.data = np.roll(self.data, -1, axis=0); self.data[-1, :] = filtered
         self.imageitem.setImage(self.data.T, autoLevels=False); self.imageitem.setLevels((10, 220))
-        
-        depth_m = (depth_index * SAMPLE_RESOLUTION) / 100.0
-        ovr_m = (override_idx * SAMPLE_RESOLUTION) / 100.0
+        depth_m, ovr_m = (depth_index * SAMPLE_RESOLUTION) / 100.0, (override_idx * SAMPLE_RESOLUTION) / 100.0
         is_valid = abs(depth_index - override_idx) <= INDEX_TOLERANCE
 
         if self.show_depth_line:
@@ -313,8 +315,7 @@ class WaterfallApp(QMainWindow):
         else: self.depth_line.hide()
 
         if self.large_depth_visible:
-            self.depth_overlay.setPos(10, NUM_SAMPLES)
-            val = depth_m if self.depth_overlay_mode == "Auto" else ovr_m
+            self.depth_overlay.setPos(10, NUM_SAMPLES); val = depth_m if self.depth_overlay_mode == "Auto" else ovr_m
             self.depth_overlay.setColor(QColor(255, 255, 255) if is_valid else QColor(255, 100, 100))
             self.depth_overlay.setText(f"{val:.1f} m" if (is_valid or self.depth_overlay_mode=="Override") else "0.0 m")
 
@@ -327,9 +328,8 @@ class WaterfallApp(QMainWindow):
         MAX_DEPTH = NUM_SAMPLES * SAMPLE_RESOLUTION
         depth_labels = {int(i / SAMPLE_RESOLUTION): f"{i / 100}" for i in range(0, int(MAX_DEPTH), Y_LABEL_DISTANCE)}
         
-        tick_font = QFont("Arial", 9) 
         ax = self.waterfall.getAxis("right")
-        ax.setTickFont(tick_font)
+        ax.setTickFont(QFont("Arial", 10))
         ax.setTicks([list(depth_labels.items())[::-1]])
         
         # 重新繪製背景點線
@@ -339,21 +339,20 @@ class WaterfallApp(QMainWindow):
             self.waterfall.addItem(pg.InfiniteLine(pos=int(i/SAMPLE_RESOLUTION), angle=0, pen=pg.mkPen(color=(255,255,255,40), style=Qt.DotLine)))
 
     def toggle_serial_connection(self):
-        if self.serial_thread and self.serial_thread.isRunning(): self.serial_thread.stop(); self.conn_btn.setText("Connect")
+        if self.serial_thread and self.serial_thread.isRunning(): self.serial_thread.stop(); self.conn_btn.setText("Connect Serial")
         else:
             self.serial_thread = SerialReader(self.serial_combo.currentText(), BAUD_RATE)
             self.serial_thread.data_received.connect(self.waterfall_plot_callback); self.serial_thread.start(); self.conn_btn.setText("Disconnect")
 
     def toggle_udp_connection(self):
-        if hasattr(self, 'udp_thread') and self.udp_thread: self.udp_thread.stop(); self.udp_thread = None; self.udp_conn_btn.setText("Connect UDP")
+        if hasattr(self, 'udp_thread') and self.udp_thread: self.udp_thread.stop(); self.udp_thread = None; self.udp_btn.setText("Connect UDP")
         else:
-            self.udp_thread = UDPReader(int(self.udp_input.text()))
-            self.udp_thread.data_received.connect(self.waterfall_plot_callback); self.udp_thread.start(); self.udp_conn_btn.setText("Disconnect UDP")
+            try:
+                self.udp_thread = UDPReader(int(self.udp_input.text())); self.udp_thread.data_received.connect(self.waterfall_plot_callback); self.udp_thread.start(); self.udp_btn.setText("Disconnect UDP")
+            except: pass
 
     def open_settings(self):
-        dlg = SettingsDialog(self, self.current_speed, self.current_gradient, self.nmea_output_enabled, self.nmea_port, get_local_ip())
-        dlg.setWindowModality(Qt.ApplicationModal); dlg.exec_()
-
+        dlg = SettingsDialog(self, self.current_speed, self.current_gradient, self.nmea_output_enabled, self.nmea_port, get_local_ip()); dlg.exec_()
     def set_gradient(self, n): self.current_gradient = n; self.colorbar.item.gradient.loadPreset(n)
     def configure_nmea_output(self, e, p): self.nmea_output_enabled, self.nmea_port = e, p
     def closeEvent(self, e):
@@ -362,6 +361,4 @@ class WaterfallApp(QMainWindow):
         e.accept()
 
 if __name__ == "__main__":
-    app = QApplication(sys.argv); qdarktheme.setup_theme("dark")
-    window = WaterfallApp(); window.show()
-    sys.exit(app.exec())
+    app = QApplication(sys.argv); qdarktheme.setup_theme("dark"); window = WaterfallApp(); window.show(); sys.exit(app.exec())
