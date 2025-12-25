@@ -139,7 +139,7 @@ class SettingsDialog(QDialog):
         self.resize(320, 520) 
         
         self.setStyleSheet("""
-            QDialog { background-color: #2b2b2b; color: #e0e0e0; font-family: Arial; }
+            QDialog { background-color: #2b2b2b; color: #e0e0e0; font-family: 'Malgun Gothic', Arial; }
             QLabel { color: #e0e0e0; font-weight: bold; font-size: 11px; }
             QComboBox, QLineEdit { 
                 background-color: #3a3a3a; border: 1px solid #555; color: white; 
@@ -291,7 +291,7 @@ class WaterfallApp(QMainWindow):
         self.resize(900, 550)
         
         self.setStyleSheet("""
-            * { font-family: Arial, sans-serif; }
+            * { font-family: 'Malgun Gothic', Arial, sans-serif; }
             QMainWindow { background-color: black; } 
             QWidget { background-color: black; color: #e0e0e0; }
             QFrame#sidebarFrame { background-color: #2b2b2b; border-left: 1px solid #1a1a1a; }
@@ -300,46 +300,30 @@ class WaterfallApp(QMainWindow):
                 background-color: transparent; 
                 border: none;
                 border-bottom: 1px solid #3e4145; 
-                color: #ccc; 
-                font-size: 15px; 
-                font-weight: bold; 
-                border-radius: 0px; 
-                padding: 10px;
+                color: #ccc; font-size: 15px; font-weight: bold; border-radius: 0px; padding: 10px;
             }
-            QPushButton.sidebar_btn:hover {
-                background-color: #3e4145; 
-                color: white;
-            }
-            QPushButton.sidebar_btn:pressed {
-                background-color: #1a1a1a;
-                color: #00aaff;
-            }
+            QPushButton.sidebar_btn:hover { background-color: #3e4145; color: white; }
+            QPushButton.sidebar_btn:pressed { background-color: #1a1a1a; color: #00aaff; }
 
             QPushButton.connect_active {
-                background-color: transparent;
-                border: none;
-                border-bottom: 1px solid #3e4145;
-                border-left: 4px solid #ff5555; 
-                color: #ff5555;
-                font-size: 15px; font-weight: bold; padding: 10px;
+                background-color: transparent; border: none; border-bottom: 1px solid #3e4145;
+                border-left: 4px solid #ff5555; color: #ff5555; font-size: 15px; font-weight: bold; padding: 10px;
             }
             QPushButton.connect_active:hover { background-color: #3e4145; }
             
             QFrame#statusFrame { 
-                background-color: transparent; 
-                border: none;
-                border-bottom: 1px solid #3e4145; 
+                background-color: transparent; border: none; border-bottom: 1px solid #3e4145; 
                 margin: 0px; padding: 5px;
             }
-            QLabel#statusTitle { 
-                color: #888; font-size: 12px; font-weight: bold; margin-bottom: 2px;
-            }
-            QLabel#statusValue { 
-                color: #00ff00; font-family: Consolas, Monospace; font-size: 13px; font-weight: bold; 
-            }
+            QLabel#statusTitle { color: #888; font-size: 12px; font-weight: bold; margin-bottom: 2px; }
+            QLabel#statusValue { color: #00ff00; font-family: Consolas, Monospace; font-size: 13px; font-weight: bold; }
         """)
 
         self.data = np.zeros((MAX_ROWS, NUM_SAMPLES))
+        
+        self.depth_history = np.full(MAX_ROWS, np.nan)
+        self.valid_history = np.zeros(MAX_ROWS, dtype=bool) 
+        
         central = QWidget(); self.setCentralWidget(central)
         main_layout = QHBoxLayout(central); main_layout.setContentsMargins(0, 0, 0, 0); main_layout.setSpacing(0)
 
@@ -357,16 +341,19 @@ class WaterfallApp(QMainWindow):
         y_right.setPen(pg.mkPen(color=(100,100,100)))
 
         self.imageitem = pg.ImageItem(axisOrder="row-major"); self.waterfall.addItem(self.imageitem); self.waterfall.invertY(True)
-        self.depth_overlay = pg.TextItem(text="--- m", color=(255, 255, 255), anchor=(0, 1))
-        self.depth_overlay.setFont(QFont("Arial Black", 56, QFont.Bold))
-        self.depth_overlay.setZValue(200); self.waterfall.addItem(self.depth_overlay)
         
-        # [關鍵修正] 1. 先建立 depth_line 
-        self.depth_line = pg.InfiniteLine(angle=0, pen=pg.mkPen("r", width=2))
+        self.depth_overlay = pg.TextItem(anchor=(0, 1)) 
+        font = QFont("Malgun Gothic", 12)
+        font.setWeight(QFont.DemiBold) 
+        self.depth_overlay.setFont(font)
+        self.depth_overlay.setZValue(200)
+        self.waterfall.addItem(self.depth_overlay)
+        
+        # [修改] 線條加粗為 6
+        self.depth_line = pg.PlotCurveItem(pen=pg.mkPen(color='k', width=6))
         self.depth_line.setZValue(50)
         self.waterfall.addItem(self.depth_line)
         
-        # [關鍵修正] 2. 然後才呼叫 update_zoom_range，這樣裡面用到 depth_line 時它已經存在了
         self.update_zoom_range()
         self.set_sound_speed(self.current_speed)
 
@@ -381,7 +368,6 @@ class WaterfallApp(QMainWindow):
         self.btn_plus = QPushButton("+"); self.btn_plus.setProperty("class", "sidebar_btn"); self.btn_plus.setFixedHeight(60)
         self.btn_plus.clicked.connect(self.zoom_in)
         side_layout.addWidget(self.btn_plus)
-        
         self.btn_minus = QPushButton("-"); self.btn_minus.setProperty("class", "sidebar_btn"); self.btn_minus.setFixedHeight(60)
         self.btn_minus.clicked.connect(self.zoom_out)
         side_layout.addWidget(self.btn_minus)
@@ -391,11 +377,12 @@ class WaterfallApp(QMainWindow):
         status_layout = QVBoxLayout(status_box); status_layout.setContentsMargins(10, 10, 10, 10); status_layout.setSpacing(2)
         lbl_title = QLabel("STATUS"); lbl_title.setObjectName("statusTitle"); lbl_title.setAlignment(Qt.AlignCenter)
         status_layout.addWidget(lbl_title)
-        self.lbl_freq = QLabel("Freq: ---"); self.lbl_freq.setObjectName("statusValue")
+        
         self.lbl_depth = QLabel("Dep: ---"); self.lbl_depth.setObjectName("statusValue")
         self.lbl_ovr = QLabel("Ovr: ---"); self.lbl_ovr.setObjectName("statusValue")
+        
         status_layout.addSpacing(5)
-        status_layout.addWidget(self.lbl_freq); status_layout.addWidget(self.lbl_depth); status_layout.addWidget(self.lbl_ovr)
+        status_layout.addWidget(self.lbl_depth); status_layout.addWidget(self.lbl_ovr)
         side_layout.addWidget(status_box)
         
         # 3. Spacer & Functions
@@ -415,7 +402,7 @@ class WaterfallApp(QMainWindow):
         self.update_zoom_range()
 
     def update_zoom_range(self):
-        pad_top = self.current_zoom_samples * 0.01; pad_bottom = self.current_zoom_samples * 0.01 
+        pad_top = self.current_zoom_samples * 0.02; pad_bottom = self.current_zoom_samples * 0.02 
         self.waterfall.setYRange(-pad_top, self.current_zoom_samples + pad_bottom, padding=0)
         tick_indices = np.linspace(0, self.current_zoom_samples, 9)
         ticks = []
@@ -433,22 +420,58 @@ class WaterfallApp(QMainWindow):
         self.data = np.roll(self.data, -1, axis=0); self.data[-1, :] = filtered
         self.imageitem.setImage(self.data.T, autoLevels=False); self.imageitem.setLevels((10, 220))
         depth_m, ovr_m = (depth_index * SAMPLE_RESOLUTION) / 100.0, (override_idx * SAMPLE_RESOLUTION) / 100.0
-        is_valid = abs(depth_index - override_idx) <= INDEX_TOLERANCE
+        
+        if depth_index < 20 or depth_index >= NUM_SAMPLES:
+            is_valid = False
+        else:
+            is_valid = abs(depth_index - override_idx) <= INDEX_TOLERANCE
+
+        # [關鍵修正] 無論是否顯示線條，都要在背景更新歷史數據！
+        # 這樣當使用者重新開啟線條時，數據才是同步的
+        target_depth_idx = depth_index if self.depth_line_mode == "Auto" else override_idx
+        
+        # 處理無效數據為 NaN
+        val_to_plot = target_depth_idx if is_valid else np.nan
+        
+        if self.depth_line_mode == "Override" and target_depth_idx >= 20:
+            val_to_plot = target_depth_idx
+
+        # 滾動歷史數據
+        self.depth_history = np.roll(self.depth_history, -1)
+        self.depth_history[-1] = val_to_plot
 
         if self.show_depth_line:
-            target = depth_index if self.depth_line_mode == "Auto" else override_idx
-            self.depth_line.setPos(target); self.depth_line.show()
-            self.depth_line.setPen(pg.mkPen((255,0,0,120 if (self.depth_line_mode=="Auto" and not is_valid) else 255), width=3))
-        else: self.depth_line.hide()
+            self.depth_line.setData(
+                x=np.arange(MAX_ROWS), 
+                y=self.depth_history, 
+                connect="finite"
+            )
+            # [修改] 寬度設為 6
+            self.depth_line.setPen(pg.mkPen(color='k', width=6))
+            self.depth_line.show()
+        else:
+            self.depth_line.hide()
 
         if self.large_depth_visible:
+            if is_valid:
+                color_hex = "#FFFFFF" 
+            else:
+                color_hex = "rgba(255, 255, 255, 0.2)" 
+            
+            freq_text = f"&nbsp;&nbsp;{drive_frequency:.0f}kHz"
+            
+            html_str = f"""
+            <div style="text-align: left; line-height: 90%; font-family: 'Malgun Gothic';">
+                <span style="font-size: 64pt; font-weight: 600; color: {color_hex};">{depth_m:.1f}</span>
+                <span style="font-size: 32pt; font-weight: 600; color: {color_hex};">m</span><br>
+                <span style="font-size: 14pt; color: #cccccc; font-weight: 600;">{freq_text}</span>
+            </div>
+            """
+            
             overlay_pos = self.current_zoom_samples - (self.current_zoom_samples * 0.02)
             self.depth_overlay.setPos(10, overlay_pos)
-            val = depth_m if self.depth_overlay_mode == "Auto" else ovr_m
-            self.depth_overlay.setColor(QColor(255, 255, 255) if is_valid else QColor(255, 100, 100))
-            self.depth_overlay.setText(f"{val:.1f} m" if (is_valid or self.depth_overlay_mode=="Override") else "0.0 m")
+            self.depth_overlay.setHtml(html_str)
 
-        self.lbl_freq.setText(f"F: {drive_frequency:.1f}k")
         self.lbl_depth.setText(f"D: {depth_m:.1f}m")
         self.lbl_ovr.setText(f"O: {ovr_m:.1f}m")
 
@@ -465,7 +488,7 @@ class WaterfallApp(QMainWindow):
             if self.serial_thread: self.serial_thread.stop(); self.serial_thread = None
             if self.udp_thread: self.udp_thread.stop(); self.udp_thread = None
             self.is_connected = False; self.btn_connect.setText("Connect"); self.btn_connect.setProperty("class", "sidebar_btn"); self.btn_connect.setStyle(self.btn_connect.style()) 
-            self.lbl_freq.setText("Freq: ---"); self.lbl_depth.setText("Dep: ---"); self.lbl_ovr.setText("Ovr: ---")
+            self.lbl_depth.setText("Dep: ---"); self.lbl_ovr.setText("Ovr: ---")
         else:
             if self.connection_source == "Serial Port":
                 if not self.serial_port_name or self.serial_port_name == "No Ports": return print("No Serial Port Selected")
