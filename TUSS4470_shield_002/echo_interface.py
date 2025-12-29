@@ -12,8 +12,9 @@ from PyQt5.QtWidgets import (
     QPushButton, QLabel, QLineEdit, QHBoxLayout, QCheckBox, 
     QDialog, QFormLayout, QFrame, QSizePolicy, QGroupBox, QScrollArea
 )
-from PyQt5.QtCore import QThread, pyqtSignal, Qt, QSize
-from PyQt5.QtGui import QPalette, QColor, QFont
+from PyQt5.QtCore import QThread, pyqtSignal, Qt, QSize, QRectF, QPoint
+from PyQt5.QtGui import QPalette, QColor, QFont, QPainter, QPen, QBrush
+
 import pyqtgraph as pg
 
 # ============================================================
@@ -41,6 +42,15 @@ DESPECKLE_THRESHOLD = 10
 SMOOTH_ALPHA = 0.25
 TVG_STRENGTH = 1.2
 
+# [優化] 預先計算 TVG 增益曲線
+TVG_CURVE = np.linspace(1.0, TVG_STRENGTH, NUM_SAMPLES)
+
+# [變數] 統一控制側邊欄按鈕文字大小
+SIDEBAR_BTN_FONT_SIZE = 15
+
+# 色階列表
+COLOR_MAPS = ["viridis", "plasma", "inferno", "magma", "thermal", "flame", "yellowy", "bipolar", "spectrum", "cyclic", "greyclip", "grey"]
+
 # --- 輔助函式 ---
 def read_packet(ser):
     while True:
@@ -61,18 +71,11 @@ def get_serial_ports():
     ports = [port.device for port in serial.tools.list_ports.comports()]
     return ports if ports else ["No Ports"]
 
-def get_local_ip():
-    try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.connect(("8.8.8.8", 80))
-        ip = s.getsockname()[0]
-        s.close()
-        return ip
-    except: return "127.0.0.1"
-
 def sonar_display_pipeline(raw_line):
     line = raw_line.astype(np.float32)
     line = np.clip(line * DISPLAY_GAIN, 0, 255)
+    
+    # Despeckle
     out = line.copy()
     half = DESPECKLE_WINDOW // 2
     for i in range(half, len(line) - half):
@@ -81,11 +84,138 @@ def sonar_display_pipeline(raw_line):
         if line[i] > local_mean + DESPECKLE_THRESHOLD and local_mean < DESPECKLE_THRESHOLD:
             out[i] = 0
     line = out
+    
+    # Smoothing
     for i in range(1, len(line)):
         line[i] = SMOOTH_ALPHA * line[i] + (1 - SMOOTH_ALPHA) * line[i - 1]
-    depth_gain = np.linspace(1.0, TVG_STRENGTH, len(line))
-    line *= depth_gain
+    
+    line *= TVG_CURVE
     return np.clip(line, 0, 255).astype(np.uint8)
+
+# --- 自定義顏色選擇彈窗 (Simrad Style Popup) ---
+class ColorPopup(QWidget):
+    colorSelected = pyqtSignal(str)
+
+    def __init__(self, current_color, parent=None):
+        super().__init__(parent)
+        self.setWindowFlags(Qt.Popup | Qt.FramelessWindowHint)
+        self.setAttribute(Qt.WA_DeleteOnClose)
+        
+        font_size = SIDEBAR_BTN_FONT_SIZE - 3
+        
+        self.setStyleSheet(f"""
+            QWidget {{
+                background-color: #2b2b2b; 
+                border: 1px solid #3e4145;
+            }}
+            QPushButton {{
+                background-color: transparent;
+                color: #e0e0e0;
+                font-family: 'Malgun Gothic';
+                font-size: {font_size}px;
+                font-weight: bold;
+                text-align: center;
+                padding: 8px 5px;
+                border: none;
+                border-bottom: 1px solid #333;
+            }}
+            QPushButton:hover {{
+                background-color: #3e4145;
+                color: white;
+            }}
+            QPushButton[active="true"] {{
+                background-color: #0078d7;
+                color: white;
+            }}
+        """)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        for color_name in COLOR_MAPS:
+            btn = QPushButton(color_name.capitalize())
+            if color_name == current_color:
+                btn.setProperty("active", True)
+            btn.clicked.connect(lambda checked, n=color_name: self.handle_click(n))
+            layout.addWidget(btn)
+            
+        self.setFixedWidth(110)
+
+    def handle_click(self, name):
+        self.colorSelected.emit(name)
+        self.close()
+
+# --- 自定義圓形儀表控件 ---
+class CircularGauge(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedSize(40, 40)
+        self.value = 1
+        self.max_value = 4
+        self.bg_color = QColor("#333333")
+        self.progress_color = QColor("#00ff00") 
+        self.setAttribute(Qt.WA_TranslucentBackground)
+
+    def set_value(self, val):
+        self.value = val
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        
+        w, h = self.width(), self.height()
+        padding = 4
+        rect = QRectF(padding, padding, w - 2*padding, h - 2*padding)
+        
+        painter.setPen(QPen(self.bg_color, 3, Qt.SolidLine, Qt.RoundCap))
+        painter.drawArc(rect, 225 * 16, -270 * 16)
+
+        if self.max_value > 0:
+            ratio = self.value / self.max_value
+            span = -270 * ratio * 16
+            painter.setPen(QPen(self.progress_color, 3, Qt.SolidLine, Qt.RoundCap))
+            painter.drawArc(rect, 225 * 16, int(span))
+
+        painter.setPen(Qt.white)
+        font = QFont("Malgun Gothic", 13, QFont.Bold)
+        painter.setFont(font)
+        painter.drawText(rect, Qt.AlignCenter, str(self.value))
+
+# --- 整合的 LNA 控制 Widget ---
+class GainGaugeWidget(QFrame):
+    clicked = pyqtSignal()
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("gainGaugeWidget")
+        self.setFixedHeight(60) 
+        self.setCursor(Qt.PointingHandCursor)
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(5, 5, 5, 5)
+        layout.setSpacing(5)
+
+        self.gauge = CircularGauge()
+        
+        label_layout = QVBoxLayout()
+        label_layout.setSpacing(0)
+        label_layout.addStretch()
+        self.lbl_main = QLabel("LNA"); self.lbl_main.setObjectName("gainLabel")
+        self.lbl_sub = QLabel("Gain"); self.lbl_sub.setObjectName("gainSubLabel")
+        label_layout.addWidget(self.lbl_main)
+        label_layout.addWidget(self.lbl_sub)
+        label_layout.addStretch()
+
+        layout.addWidget(self.gauge)
+        layout.addLayout(label_layout)
+
+    def set_value(self, val):
+        self.gauge.set_value(val)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self.clicked.emit()
 
 # --- 執行緒類別 ---
 class SerialReader(QThread):
@@ -196,24 +326,24 @@ class SettingsDialog(QDialog):
         scroll_layout.addWidget(conn_group)
 
         # 2. Display
-        app_group = QGroupBox("DISPLAY")
-        app_layout = QFormLayout(app_group); app_layout.setContentsMargins(8, 8, 8, 8); app_layout.setVerticalSpacing(6)
-        self.speed_dropdown = QComboBox(); self.speed_dropdown.addItems([f"{AIR_SPEED} m/s (Air)", f"{WATER_SPEED} m/s (Water)"]); self.speed_dropdown.setCurrentIndex(1 if self.main_app.current_speed == WATER_SPEED else 0)
-        self.gradient_dropdown = QComboBox(); self.gradient_dropdown.addItems(["viridis", "plasma", "inferno", "magma", "thermal", "flame", "yellowy", "bipolar", "spectrum", "cyclic", "greyclip", "grey"]); self.gradient_dropdown.setCurrentText(self.main_app.current_gradient)
-        app_layout.addRow("Env:", self.speed_dropdown); app_layout.addRow("Color:", self.gradient_dropdown)
-        scroll_layout.addWidget(app_group)
-
-        # 3. Overlay
-        disp_group = QGroupBox("OVERLAY")
+        disp_group = QGroupBox("DISPLAY")
         disp_layout = QFormLayout(disp_group); disp_layout.setContentsMargins(8, 8, 8, 8); disp_layout.setVerticalSpacing(6)
+        
+        self.speed_dropdown = QComboBox(); self.speed_dropdown.addItems([f"{AIR_SPEED} m/s (Air)", f"{WATER_SPEED} m/s (Water)"]); self.speed_dropdown.setCurrentIndex(1 if self.main_app.current_speed == WATER_SPEED else 0)
         self.large_depth_checkbox = QCheckBox("Show Depth"); self.large_depth_checkbox.setChecked(self.main_app.large_depth_visible)
         self.overlay_mode_combo = QComboBox(); self.overlay_mode_combo.addItems(["Auto (Threshold)", "Override (Max)"]); self.overlay_mode_combo.setCurrentIndex(0 if self.main_app.depth_overlay_mode == "Auto" else 1)
-        self.show_line_checkbox = QCheckBox("Show Red Line"); self.show_line_checkbox.setChecked(self.main_app.show_depth_line)
+        self.show_line_checkbox = QCheckBox("Show Depth Profile"); self.show_line_checkbox.setChecked(self.main_app.show_depth_line)
         self.line_mode_combo = QComboBox(); self.line_mode_combo.addItems(["Follow Auto", "Follow Override"]); self.line_mode_combo.setCurrentIndex(0 if self.main_app.depth_line_mode == "Auto" else 1)
-        disp_layout.addRow(self.large_depth_checkbox); disp_layout.addRow("Src:", self.overlay_mode_combo); disp_layout.addRow(self.show_line_checkbox); disp_layout.addRow("Line:", self.line_mode_combo)
+        
+        disp_layout.addRow("Env:", self.speed_dropdown)
+        disp_layout.addRow(self.large_depth_checkbox)
+        disp_layout.addRow("Src:", self.overlay_mode_combo)
+        disp_layout.addRow(self.show_line_checkbox)
+        disp_layout.addRow("Line:", self.line_mode_combo)
+        
         scroll_layout.addWidget(disp_group)
 
-        # 4. NMEA
+        # 3. NMEA
         nmea_group = QGroupBox("NMEA TCP")
         nmea_layout = QFormLayout(nmea_group); nmea_layout.setContentsMargins(8, 8, 8, 8); nmea_layout.setVerticalSpacing(6)
         self.nmea_checkbox = QCheckBox("Enable"); self.nmea_checkbox.setChecked(self.main_app.nmea_output_enabled)
@@ -221,10 +351,10 @@ class SettingsDialog(QDialog):
         nmea_layout.addRow("On:", self.nmea_checkbox); nmea_layout.addRow("Port:", self.nmea_port_input)
         scroll_layout.addWidget(nmea_group)
 
-        # 5. Register
+        # 4. Register
         reg_group = QGroupBox("REGISTER (HEX)")
         reg_layout = QHBoxLayout(reg_group); reg_layout.setContentsMargins(8, 15, 8, 8)
-        self.reg_input = QLineEdit(); self.reg_input.setPlaceholderText("Addr, Data")
+        self.reg_input = QLineEdit(); self.reg_input.setPlaceholderText("Addr, Data (e.g. 13, 05)")
         self.reg_btn = QPushButton("Send"); self.reg_btn.clicked.connect(self.handle_reg_send)
         reg_layout.addWidget(self.reg_input); reg_layout.addWidget(self.reg_btn)
         scroll_layout.addWidget(reg_group)
@@ -247,12 +377,21 @@ class SettingsDialog(QDialog):
 
     def handle_reg_send(self):
         txt = self.reg_input.text().strip()
-        if ',' in txt and self.main_app.serial_thread:
-            try:
-                addr, data = [int(x.strip(), 16) for x in txt.split(',')]
-                if self.main_app.serial_thread and self.main_app.serial_thread.isRunning():
-                    self.main_app.serial_thread.send_raw_command(struct.pack('BBB', ord('W'), addr, data))
-            except: pass
+        if not self.main_app.serial_thread or not self.main_app.serial_thread.isRunning():
+            print("[System] Error: Not connected. Please click 'Connect' first.")
+            return
+        if ',' not in txt:
+            print("[System] Error: Invalid format. Use 'Addr, Data' (e.g. 13, 05)")
+            return
+        try:
+            addr_str, data_str = txt.split(',')
+            addr = int(addr_str.strip(), 16)
+            data = int(data_str.strip(), 16)
+            cmd = struct.pack('BBB', ord('W'), addr, data)
+            self.main_app.serial_thread.send_raw_command(cmd)
+            print(f"[System] Command Sent: Addr={hex(addr)}, Data={hex(data)}")
+        except Exception as e:
+            print(f"[System] Error parsing input: {e}")
 
     def handle_apply(self):
         self.main_app.connection_source = self.source_combo.currentText()
@@ -260,7 +399,7 @@ class SettingsDialog(QDialog):
         self.main_app.udp_port_num = int(self.udp_port_input.text()) if self.udp_port_input.text().isdigit() else 5005
         speed = AIR_SPEED if self.speed_dropdown.currentIndex() == 0 else WATER_SPEED
         self.main_app.set_sound_speed(speed)
-        self.main_app.set_gradient(self.gradient_dropdown.currentText())
+        
         self.main_app.large_depth_visible = self.large_depth_checkbox.isChecked()
         self.main_app.depth_overlay.setVisible(self.main_app.large_depth_visible)
         self.main_app.depth_overlay_mode = "Auto" if self.overlay_mode_combo.currentIndex() == 0 else "Override"
@@ -286,56 +425,85 @@ class WaterfallApp(QMainWindow):
         
         self.current_zoom_samples = NUM_SAMPLES 
         self.min_zoom_samples = 200 
+        self.lna_gain = 4 
         
         self.setWindowTitle("Open Echo Interface")
         self.resize(900, 550)
         
-        self.setStyleSheet("""
-            * { font-family: 'Malgun Gothic', Arial, sans-serif; }
-            QMainWindow { background-color: black; } 
-            QWidget { background-color: black; color: #e0e0e0; }
-            QFrame#sidebarFrame { background-color: #2b2b2b; border-left: 1px solid #1a1a1a; }
+        self.setStyleSheet(f"""
+            * {{ font-family: 'Malgun Gothic', Arial, sans-serif; }}
+            QMainWindow {{ background-color: black; }} 
+            QWidget {{ background-color: black; color: #e0e0e0; }}
+            QFrame#sidebarFrame {{ background-color: #2b2b2b; border-left: 1px solid #1a1a1a; }}
             
-            QPushButton.sidebar_btn {
+            QPushButton.sidebar_btn {{
                 background-color: transparent; 
                 border: none;
                 border-bottom: 1px solid #3e4145; 
-                color: #ccc; font-size: 15px; font-weight: bold; border-radius: 0px; padding: 10px;
-            }
-            QPushButton.sidebar_btn:hover { background-color: #3e4145; color: white; }
-            QPushButton.sidebar_btn:pressed { background-color: #1a1a1a; color: #00aaff; }
+                color: #ccc; font-size: {SIDEBAR_BTN_FONT_SIZE}px; font-weight: bold; border-radius: 0px; padding: 10px;
+            }}
+            QPushButton.sidebar_btn:hover {{ background-color: #3e4145; color: white; }}
+            QPushButton.sidebar_btn:pressed {{ background-color: #1a1a1a; color: #00aaff; }}
 
-            QPushButton.connect_active {
+            QPushButton.connect_active {{
                 background-color: transparent; border: none; border-bottom: 1px solid #3e4145;
-                border-left: 4px solid #ff5555; color: #ff5555; font-size: 15px; font-weight: bold; padding: 10px;
-            }
-            QPushButton.connect_active:hover { background-color: #3e4145; }
+                border-left: 4px solid #ff5555; color: #ff5555; font-size: {SIDEBAR_BTN_FONT_SIZE}px; font-weight: bold; padding: 10px;
+            }}
+            QPushButton.connect_active:hover {{ background-color: #3e4145; }}
             
-            QFrame#statusFrame { 
-                background-color: transparent; border: none; border-bottom: 1px solid #3e4145; 
-                margin: 0px; padding: 5px;
-            }
-            QLabel#statusTitle { color: #888; font-size: 12px; font-weight: bold; margin-bottom: 2px; }
-            QLabel#statusValue { color: #00ff00; font-family: Consolas, Monospace; font-size: 13px; font-weight: bold; }
+            /* LNA Frame */
+            QFrame#gainGaugeWidget {{
+                background-color: transparent; 
+                border-bottom: 1px solid #3e4145; 
+            }}
+            QFrame#gainGaugeWidget:hover {{ background-color: #3e4145; }}
+
+            /* LNA Text */
+            QLabel#gainLabel {{ 
+                background-color: transparent; 
+                color: #ccc; 
+                font-weight: bold; 
+                font-size: {SIDEBAR_BTN_FONT_SIZE}px; 
+            }}
+            QLabel#gainSubLabel {{ 
+                background-color: transparent; 
+                color: #ccc; 
+                font-size: {SIDEBAR_BTN_FONT_SIZE - 2}px; 
+                margin-top: -2px; 
+            }}
+            
+            /* Footer Style - [關鍵修正] 背景透明 */
+            QFrame#footerFrame {{ background-color: #111; border-top: 1px solid #333; }}
+            QLabel#footerLabel {{ 
+                background-color: transparent; /* 移除黑色補丁 */
+                color: #aaa; 
+                font-size: 10px; 
+                margin-right: 15px; 
+            }}
         """)
 
         self.data = np.zeros((MAX_ROWS, NUM_SAMPLES))
-        
         self.depth_history = np.full(MAX_ROWS, np.nan)
-        self.valid_history = np.zeros(MAX_ROWS, dtype=bool) 
         
         central = QWidget(); self.setCentralWidget(central)
         main_layout = QHBoxLayout(central); main_layout.setContentsMargins(0, 0, 0, 0); main_layout.setSpacing(0)
 
-        # ------------------ 左側：聲納圖 ------------------
+        # --- [LEFT CONTAINER] ---
+        left_container = QWidget()
+        left_layout = QVBoxLayout(left_container)
+        left_layout.setContentsMargins(0, 0, 0, 0); left_layout.setSpacing(0)
+
+        # 1. Echogram
         self.waterfall = pg.PlotWidget(background='k')
-        vb = self.waterfall.getViewBox()
-        vb.setDefaultPadding(0)
+        vb = self.waterfall.getViewBox(); vb.setDefaultPadding(0)
         self.waterfall.setMouseEnabled(x=False, y=False)
         self.waterfall.showAxis('right'); self.waterfall.hideAxis('left'); self.waterfall.hideAxis('bottom')
+        self.waterfall.setMenuEnabled(False)
+        self.waterfall.getPlotItem().hideButtons()
         
+        # [修改] 改回 45
         y_right = self.waterfall.getAxis('right')
-        y_right.setWidth(60) 
+        y_right.setWidth(45) 
         y_right.setStyle(showValues=True)
         y_right.setTextPen(pg.mkPen(color='w'))
         y_right.setPen(pg.mkPen(color=(100,100,100)))
@@ -349,22 +517,37 @@ class WaterfallApp(QMainWindow):
         self.depth_overlay.setZValue(200)
         self.waterfall.addItem(self.depth_overlay)
         
-        # [修改] 線條加粗為 6
         self.depth_line = pg.PlotCurveItem(pen=pg.mkPen(color='k', width=6))
         self.depth_line.setZValue(50)
         self.waterfall.addItem(self.depth_line)
         
         self.update_zoom_range()
         self.set_sound_speed(self.current_speed)
+        
+        left_layout.addWidget(self.waterfall)
 
-        main_layout.addWidget(self.waterfall, stretch=1)
+        # 2. Footer Data
+        footer_frame = QFrame(); footer_frame.setObjectName("footerFrame")
+        footer_layout = QHBoxLayout(footer_frame)
+        footer_layout.setContentsMargins(5, 2, 5, 2)
+        self.lbl_footer_depth = QLabel("Depth: ---"); self.lbl_footer_depth.setObjectName("footerLabel")
+        self.lbl_footer_ovr = QLabel("Override: ---"); self.lbl_footer_ovr.setObjectName("footerLabel")
+        footer_layout.addWidget(self.lbl_footer_depth); footer_layout.addWidget(self.lbl_footer_ovr); footer_layout.addStretch() 
+        left_layout.addWidget(footer_frame)
+        
+        main_layout.addWidget(left_container, stretch=1)
 
-        # ------------------ 右側：扁平化側邊欄 ------------------
+        # --- [Hidden Colorbar] ---
+        self.colorbar = pg.HistogramLUTWidget()
+        self.colorbar.setImageItem(self.imageitem)
+        self.colorbar.item.gradient.loadPreset("cyclic")
+        
+        # --- Right Sidebar ---
         sidebar = QFrame(); sidebar.setObjectName("sidebarFrame")
         sidebar.setFixedWidth(110)
         side_layout = QVBoxLayout(sidebar); side_layout.setContentsMargins(0, 0, 0, 0); side_layout.setSpacing(0)
 
-        # 1. Zoom
+        # Zoom
         self.btn_plus = QPushButton("+"); self.btn_plus.setProperty("class", "sidebar_btn"); self.btn_plus.setFixedHeight(60)
         self.btn_plus.clicked.connect(self.zoom_in)
         side_layout.addWidget(self.btn_plus)
@@ -372,26 +555,59 @@ class WaterfallApp(QMainWindow):
         self.btn_minus.clicked.connect(self.zoom_out)
         side_layout.addWidget(self.btn_minus)
         
-        # 2. Status
-        status_box = QFrame(); status_box.setObjectName("statusFrame")
-        status_layout = QVBoxLayout(status_box); status_layout.setContentsMargins(10, 10, 10, 10); status_layout.setSpacing(2)
-        lbl_title = QLabel("STATUS"); lbl_title.setObjectName("statusTitle"); lbl_title.setAlignment(Qt.AlignCenter)
-        status_layout.addWidget(lbl_title)
+        # Color Button
+        self.btn_color = QPushButton("Color")
+        self.btn_color.setProperty("class", "sidebar_btn"); self.btn_color.setFixedHeight(60)
+        self.btn_color.clicked.connect(self.show_color_menu)
+        side_layout.addWidget(self.btn_color)
         
-        self.lbl_depth = QLabel("Dep: ---"); self.lbl_depth.setObjectName("statusValue")
-        self.lbl_ovr = QLabel("Ovr: ---"); self.lbl_ovr.setObjectName("statusValue")
+        # LNA Gauge Widget
+        self.lna_widget = GainGaugeWidget()
+        self.lna_widget.set_value(self.lna_gain) 
+        self.lna_widget.clicked.connect(self.cycle_lna_gain)
+        side_layout.addWidget(self.lna_widget)
         
-        status_layout.addSpacing(5)
-        status_layout.addWidget(self.lbl_depth); status_layout.addWidget(self.lbl_ovr)
-        side_layout.addWidget(status_box)
-        
-        # 3. Spacer & Functions
+        # Spacer & Functions
         spacer = QWidget(); spacer.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Expanding); spacer.setStyleSheet("background-color: transparent;"); side_layout.addWidget(spacer)
         self.btn_settings = QPushButton("Settings"); self.btn_settings.setProperty("class", "sidebar_btn"); self.btn_settings.setFixedHeight(60); self.btn_settings.clicked.connect(self.open_settings); side_layout.addWidget(self.btn_settings)
         self.btn_connect = QPushButton("Connect"); self.btn_connect.setProperty("class", "sidebar_btn"); self.btn_connect.setFixedHeight(60); self.btn_connect.clicked.connect(self.handle_main_connect); side_layout.addWidget(self.btn_connect)
 
         main_layout.addWidget(sidebar)
-        self.colorbar = pg.HistogramLUTWidget(); self.colorbar.setImageItem(self.imageitem); self.colorbar.item.gradient.loadPreset("cyclic"); self.imageitem.setLevels(DEFAULT_LEVELS)
+
+    def show_color_menu(self):
+        btn_pos = self.btn_color.mapToGlobal(QPoint(0, 0))
+        popup = ColorPopup(self.current_gradient, self)
+        popup.colorSelected.connect(self.set_gradient)
+        
+        popup.adjustSize()
+        x = btn_pos.x() - popup.width()
+        
+        y = btn_pos.y()
+        screen_geo = QApplication.desktop().availableGeometry(btn_pos)
+        
+        if y + popup.height() > screen_geo.bottom():
+            y = screen_geo.bottom() - popup.height() - 5
+        if y < screen_geo.top():
+            y = screen_geo.top() + 5
+            
+        popup.move(x, y)
+        popup.show()
+
+    def set_gradient(self, n): 
+        self.current_gradient = n
+        self.colorbar.item.gradient.loadPreset(n)
+
+    def cycle_lna_gain(self):
+        self.lna_gain += 1
+        if self.lna_gain > 4: self.lna_gain = 1
+        
+        self.lna_widget.set_value(self.lna_gain)
+        
+        if self.serial_thread and self.serial_thread.isRunning():
+            reg_map = {1: 0x05, 2: 0x07, 3: 0x04, 4: 0x06}
+            val = reg_map.get(self.lna_gain, 0x06)
+            cmd = struct.pack('BBB', ord('W'), 0x13, val)
+            self.serial_thread.send_raw_command(cmd)
 
     def zoom_in(self):
         self.current_zoom_samples = max(self.min_zoom_samples, self.current_zoom_samples - 200)
@@ -401,19 +617,49 @@ class WaterfallApp(QMainWindow):
         self.current_zoom_samples = min(NUM_SAMPLES, self.current_zoom_samples + 200)
         self.update_zoom_range()
 
+    # [關鍵修正] 1-2-5 規則刻度 + 即時更新文字位置
     def update_zoom_range(self):
         pad_top = self.current_zoom_samples * 0.02; pad_bottom = self.current_zoom_samples * 0.02 
         self.waterfall.setYRange(-pad_top, self.current_zoom_samples + pad_bottom, padding=0)
-        tick_indices = np.linspace(0, self.current_zoom_samples, 9)
+        
+        # 1. 解決文字閃爍問題 (即時更新)
+        overlay_pos = self.current_zoom_samples - (self.current_zoom_samples * 0.02)
+        self.depth_overlay.setPos(10, overlay_pos)
+        
+        # 2. 計算刻度
+        max_depth_m = (self.current_zoom_samples * SAMPLE_RESOLUTION) / 100.0
+        target_ticks = 8
+        raw_step = max_depth_m / target_ticks
+        
+        mag = 10 ** np.floor(np.log10(raw_step)) if raw_step > 0 else 1
+        norm_step = raw_step / mag
+        
+        if norm_step <= 1.0: nice_step = 1.0 * mag
+        elif norm_step <= 2.0: nice_step = 2.0 * mag
+        elif norm_step <= 5.0: nice_step = 5.0 * mag
+        else: nice_step = 10.0 * mag
+        
+        tick_depths = np.arange(0, max_depth_m + nice_step, nice_step)
+        
+        decimal_places = 0
+        if nice_step < 1:
+            decimal_places = int(abs(np.floor(np.log10(nice_step))))
+        fmt = f"{{:.{decimal_places}f}}"
+        
         ticks = []
-        for idx in tick_indices:
-            depth_m = (idx * SAMPLE_RESOLUTION) / 100.0
-            ticks.append((idx, f"{depth_m:.1f}"))
+        for d in tick_depths:
+            if d > max_depth_m: break
+            idx = (d * 100.0) / SAMPLE_RESOLUTION
+            ticks.append((idx, fmt.format(d)))
+            
         ax = self.waterfall.getAxis("right"); ax.setTicks([ticks])
+        
         for item in self.waterfall.items():
             if isinstance(item, pg.InfiniteLine) and item != self.depth_line: self.waterfall.removeItem(item)
-        for idx in tick_indices[1:]:
-            line = pg.InfiniteLine(pos=idx, angle=0, pen=pg.mkPen(color=(255,255,255,30), style=Qt.DashLine)); self.waterfall.addItem(line)
+        for idx, label in ticks:
+            if idx > 0:
+                line = pg.InfiniteLine(pos=idx, angle=0, pen=pg.mkPen(color=(255,255,255,30), style=Qt.DashLine))
+                self.waterfall.addItem(line)
 
     def waterfall_plot_callback(self, spectrogram, depth_index, drive_frequency, override_idx):
         filtered = sonar_display_pipeline(spectrogram)
@@ -426,27 +672,17 @@ class WaterfallApp(QMainWindow):
         else:
             is_valid = abs(depth_index - override_idx) <= INDEX_TOLERANCE
 
-        # [關鍵修正] 無論是否顯示線條，都要在背景更新歷史數據！
-        # 這樣當使用者重新開啟線條時，數據才是同步的
         target_depth_idx = depth_index if self.depth_line_mode == "Auto" else override_idx
-        
-        # 處理無效數據為 NaN
         val_to_plot = target_depth_idx if is_valid else np.nan
         
         if self.depth_line_mode == "Override" and target_depth_idx >= 20:
             val_to_plot = target_depth_idx
 
-        # 滾動歷史數據
         self.depth_history = np.roll(self.depth_history, -1)
         self.depth_history[-1] = val_to_plot
 
         if self.show_depth_line:
-            self.depth_line.setData(
-                x=np.arange(MAX_ROWS), 
-                y=self.depth_history, 
-                connect="finite"
-            )
-            # [修改] 寬度設為 6
+            self.depth_line.setData(x=np.arange(MAX_ROWS), y=self.depth_history, connect="finite")
             self.depth_line.setPen(pg.mkPen(color='k', width=6))
             self.depth_line.show()
         else:
@@ -464,7 +700,7 @@ class WaterfallApp(QMainWindow):
             <div style="text-align: left; line-height: 90%; font-family: 'Malgun Gothic';">
                 <span style="font-size: 64pt; font-weight: 600; color: {color_hex};">{depth_m:.1f}</span>
                 <span style="font-size: 32pt; font-weight: 600; color: {color_hex};">m</span><br>
-                <span style="font-size: 14pt; color: #cccccc; font-weight: 600;">{freq_text}</span>
+                <span style="font-size: 10pt; color: #cccccc; font-weight: 600;">{freq_text}</span>
             </div>
             """
             
@@ -472,8 +708,8 @@ class WaterfallApp(QMainWindow):
             self.depth_overlay.setPos(10, overlay_pos)
             self.depth_overlay.setHtml(html_str)
 
-        self.lbl_depth.setText(f"D: {depth_m:.1f}m")
-        self.lbl_ovr.setText(f"O: {ovr_m:.1f}m")
+        self.lbl_footer_depth.setText(f"Depth: {depth_m * 100:.0f} cm")
+        self.lbl_footer_ovr.setText(f"Override: {ovr_m * 100:.0f} cm")
 
     def set_sound_speed(self, speed):
         global SPEED_OF_SOUND, SAMPLE_RESOLUTION, MAX_DEPTH, depth_labels
@@ -488,18 +724,28 @@ class WaterfallApp(QMainWindow):
             if self.serial_thread: self.serial_thread.stop(); self.serial_thread = None
             if self.udp_thread: self.udp_thread.stop(); self.udp_thread = None
             self.is_connected = False; self.btn_connect.setText("Connect"); self.btn_connect.setProperty("class", "sidebar_btn"); self.btn_connect.setStyle(self.btn_connect.style()) 
-            self.lbl_depth.setText("Dep: ---"); self.lbl_ovr.setText("Ovr: ---")
+            self.lbl_footer_depth.setText("Depth: ---")
+            self.lbl_footer_ovr.setText("Override: ---")
         else:
             if self.connection_source == "Serial Port":
                 if not self.serial_port_name or self.serial_port_name == "No Ports": return print("No Serial Port Selected")
                 self.serial_thread = SerialReader(self.serial_port_name, BAUD_RATE); self.serial_thread.data_received.connect(self.waterfall_plot_callback); self.serial_thread.start()
+                
+                QThread.msleep(100) # 等待 Serial 開啟
+                reg_map = {1: 0x05, 2: 0x07, 3: 0x04, 4: 0x06}
+                val = reg_map.get(self.lna_gain, 0x06)
+                self.serial_thread.send_raw_command(struct.pack('BBB', ord('W'), 0x13, val))
+                
             else:
                 try: self.udp_thread = UDPReader(self.udp_port_num); self.udp_thread.data_received.connect(self.waterfall_plot_callback); self.udp_thread.start()
                 except: return
             self.is_connected = True; self.btn_connect.setText("Stop"); self.btn_connect.setProperty("class", "connect_active"); self.btn_connect.setStyle(self.btn_connect.style())
 
     def open_settings(self): dlg = SettingsDialog(self); dlg.exec_()
-    def set_gradient(self, n): self.current_gradient = n; self.colorbar.item.gradient.loadPreset(n)
+    def set_gradient(self, n): 
+        self.current_gradient = n
+        self.colorbar.item.gradient.loadPreset(n)
+        
     def configure_nmea_output(self, e, p): self.nmea_output_enabled, self.nmea_port = e, p
     def closeEvent(self, e):
         if self.serial_thread: self.serial_thread.stop()
