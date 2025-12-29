@@ -268,6 +268,9 @@ class SettingsDialog(QDialog):
         self.setWindowTitle("Config")
         self.resize(320, 520) 
         
+        # 變數：Echo Threshold (預設 16)
+        self.echo_thr_val = 16
+
         self.setStyleSheet("""
             QDialog { background-color: #2b2b2b; color: #e0e0e0; font-family: 'Malgun Gothic', Arial; }
             QLabel { color: #e0e0e0; font-weight: bold; font-size: 11px; }
@@ -328,7 +331,6 @@ class SettingsDialog(QDialog):
         # 2. Display
         disp_group = QGroupBox("DISPLAY")
         disp_layout = QFormLayout(disp_group); disp_layout.setContentsMargins(8, 8, 8, 8); disp_layout.setVerticalSpacing(6)
-        
         self.speed_dropdown = QComboBox(); self.speed_dropdown.addItems([f"{AIR_SPEED} m/s (Air)", f"{WATER_SPEED} m/s (Water)"]); self.speed_dropdown.setCurrentIndex(1 if self.main_app.current_speed == WATER_SPEED else 0)
         self.large_depth_checkbox = QCheckBox("Show Depth"); self.large_depth_checkbox.setChecked(self.main_app.large_depth_visible)
         self.overlay_mode_combo = QComboBox(); self.overlay_mode_combo.addItems(["Auto (Threshold)", "Override (Max)"]); self.overlay_mode_combo.setCurrentIndex(0 if self.main_app.depth_overlay_mode == "Auto" else 1)
@@ -340,7 +342,6 @@ class SettingsDialog(QDialog):
         disp_layout.addRow("Src:", self.overlay_mode_combo)
         disp_layout.addRow(self.show_line_checkbox)
         disp_layout.addRow("Line:", self.line_mode_combo)
-        
         scroll_layout.addWidget(disp_group)
 
         # 3. NMEA
@@ -351,12 +352,56 @@ class SettingsDialog(QDialog):
         nmea_layout.addRow("On:", self.nmea_checkbox); nmea_layout.addRow("Port:", self.nmea_port_input)
         scroll_layout.addWidget(nmea_group)
 
-        # 4. Register
-        reg_group = QGroupBox("REGISTER (HEX)")
-        reg_layout = QHBoxLayout(reg_group); reg_layout.setContentsMargins(8, 15, 8, 8)
+        # 4. Register (Revised)
+        reg_group = QGroupBox("REGISTER")
+        reg_layout = QVBoxLayout(reg_group)
+        reg_layout.setContentsMargins(8, 15, 8, 8)
+        reg_layout.setSpacing(10)
+
+        # [Row 1] Echo Threshold
+        echo_layout = QHBoxLayout()
+        self.lbl_echo_title = QLabel("Echo Thr:")
+        
+        self.btn_echo_minus = QPushButton("-")
+        self.btn_echo_minus.setFixedSize(25, 20)
+        self.btn_echo_minus.clicked.connect(self.decrease_echo_thr)
+        
+        self.lbl_echo_val = QLabel(str(self.echo_thr_val))
+        self.lbl_echo_val.setAlignment(Qt.AlignCenter)
+        self.lbl_echo_val.setFixedWidth(20)
+        
+        self.btn_echo_plus = QPushButton("+")
+        self.btn_echo_plus.setFixedSize(25, 20)
+        self.btn_echo_plus.clicked.connect(self.increase_echo_thr)
+        
+        self.btn_echo_send = QPushButton("Send")
+        self.btn_echo_send.setCursor(Qt.PointingHandCursor)
+        self.btn_echo_send.setFixedWidth(50) 
+        self.btn_echo_send.clicked.connect(self.send_echo_thr_cmd)
+        
+        echo_layout.addWidget(self.lbl_echo_title)
+        echo_layout.addWidget(self.btn_echo_minus)
+        echo_layout.addWidget(self.lbl_echo_val)
+        echo_layout.addWidget(self.btn_echo_plus)
+        echo_layout.addStretch() 
+        echo_layout.addWidget(self.btn_echo_send)
+        
+        # [Row 2] Custom Hex Send
+        custom_layout = QHBoxLayout()
+        self.lbl_raw_title = QLabel("Raw Reg:") 
         self.reg_input = QLineEdit(); self.reg_input.setPlaceholderText("Addr, Data (e.g. 13, 05)")
-        self.reg_btn = QPushButton("Send"); self.reg_btn.clicked.connect(self.handle_reg_send)
-        reg_layout.addWidget(self.reg_input); reg_layout.addWidget(self.reg_btn)
+        self.reg_btn = QPushButton("Send")
+        self.reg_btn.setCursor(Qt.PointingHandCursor)
+        self.reg_btn.setFixedWidth(50) 
+        self.reg_btn.clicked.connect(self.handle_reg_send)
+        
+        custom_layout.addWidget(self.lbl_raw_title)
+        custom_layout.addWidget(self.reg_input)
+        custom_layout.addWidget(self.reg_btn) 
+
+        reg_layout.addLayout(echo_layout)
+        reg_layout.addLayout(custom_layout)
+        
         scroll_layout.addWidget(reg_group)
 
         scroll_layout.addStretch()
@@ -369,6 +414,37 @@ class SettingsDialog(QDialog):
         cancel_btn = QPushButton("Cancel"); cancel_btn.clicked.connect(self.close)
         btn_layout.addStretch(); btn_layout.addWidget(apply_btn); btn_layout.addWidget(cancel_btn)
         main_layout.addLayout(btn_layout)
+
+    def decrease_echo_thr(self):
+        if self.echo_thr_val > 1:
+            self.echo_thr_val -= 1
+            self.lbl_echo_val.setText(str(self.echo_thr_val))
+
+    def increase_echo_thr(self):
+        if self.echo_thr_val < 16:
+            self.echo_thr_val += 1
+            self.lbl_echo_val.setText(str(self.echo_thr_val))
+
+    def send_echo_thr_cmd(self):
+        if not self.main_app.serial_thread or not self.main_app.serial_thread.isRunning():
+            print("[System] Error: Not connected. Cannot send Echo Thr.")
+            return
+        
+        # 1. 計算數值 (0-15)
+        raw_val = self.echo_thr_val - 1
+        
+        # 2. 強制 Bit 4 為 1 (Enable interrupt)
+        # raw_val | 0x10 (0001 0000)
+        data = raw_val | 0x10 
+        
+        addr = 0x17 
+        
+        try:
+            cmd = struct.pack('BBB', ord('W'), addr, data)
+            self.main_app.serial_thread.send_raw_command(cmd)
+            print(f"[System] Echo Thr Sent: Val={self.echo_thr_val} (Reg=0x{data:X}) to Addr 0x17")
+        except Exception as e:
+            print(f"[System] Error sending Echo Thr: {e}")
 
     def update_inputs(self, text):
         is_serial = (text == "Serial Port")
@@ -501,7 +577,6 @@ class WaterfallApp(QMainWindow):
         self.waterfall.setMenuEnabled(False)
         self.waterfall.getPlotItem().hideButtons()
         
-        # [修改] 改回 45
         y_right = self.waterfall.getAxis('right')
         y_right.setWidth(45) 
         y_right.setStyle(showValues=True)
@@ -617,16 +692,13 @@ class WaterfallApp(QMainWindow):
         self.current_zoom_samples = min(NUM_SAMPLES, self.current_zoom_samples + 200)
         self.update_zoom_range()
 
-    # [關鍵修正] 1-2-5 規則刻度 + 即時更新文字位置
     def update_zoom_range(self):
         pad_top = self.current_zoom_samples * 0.02; pad_bottom = self.current_zoom_samples * 0.02 
         self.waterfall.setYRange(-pad_top, self.current_zoom_samples + pad_bottom, padding=0)
         
-        # 1. 解決文字閃爍問題 (即時更新)
         overlay_pos = self.current_zoom_samples - (self.current_zoom_samples * 0.02)
         self.depth_overlay.setPos(10, overlay_pos)
         
-        # 2. 計算刻度
         max_depth_m = (self.current_zoom_samples * SAMPLE_RESOLUTION) / 100.0
         target_ticks = 8
         raw_step = max_depth_m / target_ticks
@@ -698,8 +770,8 @@ class WaterfallApp(QMainWindow):
             
             html_str = f"""
             <div style="text-align: left; line-height: 90%; font-family: 'Malgun Gothic';">
-                <span style="font-size: 64pt; font-weight: 600; color: {color_hex};">{depth_m:.1f}</span>
-                <span style="font-size: 32pt; font-weight: 600; color: {color_hex};">m</span><br>
+                <span style="font-size: 64pt; font-weight: 600; color: {color_hex};">{depth_m * 100:.0f}</span>
+                <span style="font-size: 32pt; font-weight: 600; color: {color_hex};">cm</span><br>
                 <span style="font-size: 10pt; color: #cccccc; font-weight: 600;">{freq_text}</span>
             </div>
             """
