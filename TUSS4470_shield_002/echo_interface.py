@@ -26,6 +26,7 @@ DEFAULT_ENVIRONMENT = 'AIR'
 
 BAUD_RATE = 250000
 NUM_SAMPLES = 1800
+INDEX_TOLERANCE = 10
 MAX_ROWS = 300
 Y_LABEL_DISTANCE = 50  
 SAMPLE_TIME = 13.2e-6
@@ -34,8 +35,7 @@ DEFAULT_LEVELS = (0, 256)
 # [設定] Python 端顯示過濾門檻 (小於此 Index 的回波不顯示數值)
 PYTHON_IGNORE_INDEX = 20
 
-# [設定] 容許誤差 (Tolerance)：硬體與軟體偵測的 Index 差異在此數值內才視為有效
-# 修改為 50
+# [設定] 容許誤差 (Tolerance)
 INDEX_TOLERANCE = 50
 
 SPEED_OF_SOUND = AIR_SPEED if DEFAULT_ENVIRONMENT == 'AIR' else WATER_SPEED 
@@ -439,7 +439,7 @@ class WaterfallApp(QMainWindow):
         diff = abs(int(depth_index) - int(override_idx))
         is_consistent = (diff <= INDEX_TOLERANCE)
         
-        # 3. 可靠性 (需同時滿足)
+        # 3. 可靠性 (Reliability): 硬體有訊號 且 與軟體計算接近
         is_reliable = not_blind and is_consistent
         
         # 4. 決定目標值 (顯示的數字)
@@ -486,12 +486,14 @@ class WaterfallApp(QMainWindow):
                 if not self.serial_port_name or self.serial_port_name == "No Ports": return print("No Serial Port Selected")
                 self.serial_thread = SerialReader(self.serial_port_name, BAUD_RATE); self.serial_thread.data_received.connect(self.waterfall_plot_callback); self.serial_thread.start()
                 
-                QThread.msleep(100) 
+                QThread.msleep(2000) # [關鍵] 等待 2000ms 讓 Arduino 開機完畢
                 
+                # [關鍵] 連線時同步發送當前選定的 LNA Gain
                 reg_map = {1: 0x05, 2: 0x07, 3: 0x04, 4: 0x06}
                 val = reg_map.get(self.lna_gain, 0x06)
                 self.serial_thread.send_raw_command(struct.pack('BBB', ord('W'), 0x13, val))
                 
+                # 同步發送記憶的 Echo Thr
                 data = (self.saved_echo_thr - 1) | 0x10; addr = 0x17
                 self.serial_thread.send_raw_command(struct.pack('BBB', ord('W'), addr, data))
                 
