@@ -24,23 +24,17 @@ AIR_SPEED = 343.0
 WATER_SPEED = 1440.0   
 DEFAULT_ENVIRONMENT = 'AIR' 
 
-BAUD_RATE = 250000
-NUM_SAMPLES = 1800
-INDEX_TOLERANCE = 10
+BAUD_RATE = 2000000 
 MAX_ROWS = 300
 Y_LABEL_DISTANCE = 50  
 SAMPLE_TIME = 13.2e-6
 DEFAULT_LEVELS = (0, 256)
 
-# [設定] Python 端顯示過濾門檻 (小於此 Index 的回波不顯示數值)
 PYTHON_IGNORE_INDEX = 20
-
-# [設定] 容許誤差 (Tolerance)
 INDEX_TOLERANCE = 50
 
 SPEED_OF_SOUND = AIR_SPEED if DEFAULT_ENVIRONMENT == 'AIR' else WATER_SPEED 
 SAMPLE_RESOLUTION = (SPEED_OF_SOUND * SAMPLE_TIME * 100) / 2
-MAX_DEPTH = NUM_SAMPLES * SAMPLE_RESOLUTION
 
 DISPLAY_GAIN = 1.3
 DESPECKLE_WINDOW = 3
@@ -48,35 +42,45 @@ DESPECKLE_THRESHOLD = 10
 SMOOTH_ALPHA = 0.25
 TVG_STRENGTH = 1.2
 
-TVG_CURVE = np.linspace(1.0, TVG_STRENGTH, NUM_SAMPLES)
 SIDEBAR_BTN_FONT_SIZE = 15
 COLOR_MAPS = ["viridis", "plasma", "inferno", "magma", "thermal", "flame", "yellowy", "bipolar", "spectrum", "cyclic", "greyclip", "grey"]
+
+# [修改] 更新 Range 選項: 移除 2.5，加入 4.0, 3.0, 2.0
+RANGE_OPTIONS_AIR = [10.0, 5.0, 4.0, 3.0, 2.0, 1.0, 0.5, 0.1]
+RANGE_OPTIONS_WATER = [40.0, 20.0, 10.0, 5.0, 4.0, 3.0, 2.0, 1.0]
 
 # --- 輔助函式 ---
 def read_packet(ser):
     if ser.in_waiting == 0: 
         return None
-    header = ser.read(1)
-    if header != b"\xaa": 
-        return None
-    payload = ser.read(6 + NUM_SAMPLES)
-    checksum = ser.read(1)
-    if len(payload) != 6 + NUM_SAMPLES or len(checksum) != 1: 
-        return None
+    
+    header_bytes = ser.read(9)
+    if len(header_bytes) != 9: return None
+    if header_bytes[0] != 0xAA: return None 
+    
+    start, depth, freq_scaled, vDrv_scaled, num_samples = struct.unpack("<BHhHH", header_bytes)
+    
+    payload = ser.read(num_samples)
+    if len(payload) != num_samples: return None
+    
+    checksum_bytes = ser.read(1)
+    if len(checksum_bytes) != 1: return None
+    
     calc_checksum = 0
-    for byte in payload: calc_checksum ^= byte
-    if calc_checksum != checksum[0]: 
+    for b in header_bytes[1:]: calc_checksum ^= b
+    for b in payload: calc_checksum ^= b
+    
+    if calc_checksum != checksum_bytes[0]: 
         return None
-    depth, freq_scaled, vDrv_scaled = struct.unpack("<HhH", payload[:6])
-    sample_bytes = payload[6:6+NUM_SAMPLES]
-    values = np.frombuffer(sample_bytes, dtype=np.uint8, count=NUM_SAMPLES)
-    return values, min(depth, NUM_SAMPLES), freq_scaled, float(vDrv_scaled)
+        
+    values = np.frombuffer(payload, dtype=np.uint8, count=num_samples)
+    return values, min(depth, num_samples), freq_scaled, float(vDrv_scaled)
 
 def get_serial_ports():
     ports = [port.device for port in serial.tools.list_ports.comports()]
     return ports if ports else ["No Ports"]
 
-def sonar_display_pipeline(raw_line):
+def sonar_display_pipeline(raw_line, tvg_curve):
     line = raw_line.astype(np.float32)
     line = np.clip(line * DISPLAY_GAIN, 0, 255)
     out = line.copy()
@@ -89,32 +93,55 @@ def sonar_display_pipeline(raw_line):
     line = out
     for i in range(1, len(line)):
         line[i] = SMOOTH_ALPHA * line[i] + (1 - SMOOTH_ALPHA) * line[i - 1]
-    line *= TVG_CURVE
+    
+    if len(tvg_curve) == len(line):
+        line *= tvg_curve
+        
     return np.clip(line, 0, 255).astype(np.uint8)
 
-# --- 自定義顏色選擇彈窗 ---
-class ColorPopup(QWidget):
-    colorSelected = pyqtSignal(str)
-    def __init__(self, current_color, parent=None):
+# --- UI Classes ---
+class BasePopup(QWidget):
+    def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowFlags(Qt.Popup | Qt.FramelessWindowHint)
         self.setAttribute(Qt.WA_DeleteOnClose)
-        font_size = SIDEBAR_BTN_FONT_SIZE - 3
+        self.font_size = SIDEBAR_BTN_FONT_SIZE - 3
         self.setStyleSheet(f"""
             QWidget {{ background-color: #2b2b2b; border: 1px solid #3e4145; }}
-            QPushButton {{ background-color: transparent; color: #e0e0e0; font-family: 'Malgun Gothic'; font-size: {font_size}px; font-weight: bold; text-align: center; padding: 8px 5px; border: none; border-bottom: 1px solid #333; }}
+            QPushButton {{ background-color: transparent; color: #e0e0e0; font-family: 'Malgun Gothic'; font-size: {self.font_size}px; font-weight: bold; text-align: center; padding: 8px 5px; border: none; border-bottom: 1px solid #333; }}
             QPushButton:hover {{ background-color: #3e4145; color: white; }}
             QPushButton[active="true"] {{ background-color: #0078d7; color: white; }}
         """)
+
+class ColorPopup(BasePopup):
+    itemSelected = pyqtSignal(str)
+    def __init__(self, current, parent=None):
+        super().__init__(parent)
         layout = QVBoxLayout(self); layout.setContentsMargins(0, 0, 0, 0); layout.setSpacing(0)
-        for color_name in COLOR_MAPS:
-            btn = QPushButton(color_name.capitalize())
-            if color_name == current_color: btn.setProperty("active", True)
-            btn.clicked.connect(lambda checked, n=color_name: self.handle_click(n))
+        for name in COLOR_MAPS:
+            btn = QPushButton(name.capitalize())
+            if name == current: btn.setProperty("active", True)
+            btn.clicked.connect(lambda checked, n=name: self.handle_click(n))
             layout.addWidget(btn)
         self.setFixedWidth(110)
-    def handle_click(self, name):
-        self.colorSelected.emit(name); self.close()
+    def handle_click(self, name): self.itemSelected.emit(name); self.close()
+
+class RangePopup(BasePopup):
+    itemSelected = pyqtSignal(float)
+    def __init__(self, current_val, options, parent=None):
+        super().__init__(parent)
+        layout = QVBoxLayout(self); layout.setContentsMargins(0, 0, 0, 0); layout.setSpacing(0)
+        total_depth_m = (parent.current_zoom_samples * SAMPLE_RESOLUTION) / 100.0
+        current_step_approx = total_depth_m / 4.0
+        for val in options:
+            if val < 1.0: text = f"{val*100:.0f} cm"
+            else: text = f"{val:.1f} m" if val % 1 != 0 else f"{val:.0f} m"
+            btn = QPushButton(text)
+            if abs(val - current_step_approx) < (val * 0.1): btn.setProperty("active", True)
+            btn.clicked.connect(lambda checked, v=val: self.handle_click(v))
+            layout.addWidget(btn)
+        self.setFixedWidth(110)
+    def handle_click(self, val): self.itemSelected.emit(val); self.close()
 
 class CircularGauge(QWidget):
     def __init__(self, parent=None):
@@ -177,11 +204,8 @@ class UDPReader(QThread):
             sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); sock.settimeout(1.0); sock.bind(("", self.port))
             while self.running:
                 try:
-                    data, _ = sock.recvfrom(1 + 6 + NUM_SAMPLES + 100)
-                    if data[0] == 0xAA:
-                        payload = data[1:1+6+NUM_SAMPLES]
-                        d, f, v = struct.unpack("<HhH", payload[:6])
-                        self.data_received.emit(np.frombuffer(payload[6:], dtype=np.uint8), d, f, float(v))
+                    data, _ = sock.recvfrom(65536) 
+                    pass 
                 except: continue
         finally: sock.close()
 
@@ -190,7 +214,7 @@ class SettingsDialog(QDialog):
     def __init__(self, parent):
         super().__init__(parent)
         self.main_app = parent
-        self.setWindowTitle("Config"); self.resize(320, 520)
+        self.setWindowTitle("Config"); self.resize(320, 580)
         self.echo_thr_val = self.main_app.saved_echo_thr
         
         self.setStyleSheet("""
@@ -218,7 +242,18 @@ class SettingsDialog(QDialog):
         self.source_combo = QComboBox(); self.source_combo.addItems(["Serial Port", "UDP Stream"]); self.source_combo.setCurrentText(self.main_app.connection_source)
         self.serial_combo = QComboBox(); self.serial_combo.addItems(get_serial_ports()); self.serial_combo.setCurrentText(self.main_app.serial_port_name)
         self.udp_port_input = QLineEdit(str(self.main_app.udp_port_num))
-        conn_layout.addRow("Type:", self.source_combo); conn_layout.addRow("Port:", self.serial_combo); conn_layout.addRow("UDP:", self.udp_port_input)
+        
+        self.res_combo = QComboBox()
+        self.res_combo.addItems(["2000", "4000", "8000", "12000", "18000"])
+        current_res_str = str(self.main_app.current_max_samples)
+        index = self.res_combo.findText(current_res_str)
+        if index >= 0: self.res_combo.setCurrentIndex(index)
+        
+        conn_layout.addRow("Type:", self.source_combo); 
+        conn_layout.addRow("Port:", self.serial_combo); 
+        conn_layout.addRow("UDP:", self.udp_port_input)
+        conn_layout.addRow("Samples:", self.res_combo) 
+        
         self.source_combo.currentTextChanged.connect(self.update_inputs); self.update_inputs(self.source_combo.currentText())
         scroll_layout.addWidget(conn_group)
 
@@ -241,8 +276,6 @@ class SettingsDialog(QDialog):
 
         # 4. Register
         reg_group = QGroupBox("REGISTER"); reg_layout = QVBoxLayout(reg_group); reg_layout.setContentsMargins(8, 15, 8, 8); reg_layout.setSpacing(10)
-        
-        # Echo Thr Row
         echo_layout = QHBoxLayout()
         self.lbl_echo_title = QLabel("Echo Thr:")
         self.btn_echo_minus = QPushButton("-"); self.btn_echo_minus.setFixedSize(25, 20); self.btn_echo_minus.clicked.connect(self.decrease_echo_thr)
@@ -251,7 +284,6 @@ class SettingsDialog(QDialog):
         self.btn_echo_send = QPushButton("Send"); self.btn_echo_send.setCursor(Qt.PointingHandCursor); self.btn_echo_send.setFixedWidth(50); self.btn_echo_send.clicked.connect(self.send_echo_thr_cmd)
         echo_layout.addWidget(self.lbl_echo_title); echo_layout.addWidget(self.btn_echo_minus); echo_layout.addWidget(self.lbl_echo_val); echo_layout.addWidget(self.btn_echo_plus); echo_layout.addStretch(); echo_layout.addWidget(self.btn_echo_send)
         
-        # Custom Hex Row
         custom_layout = QHBoxLayout()
         self.lbl_raw_title = QLabel("Raw Reg:") 
         self.reg_input = QLineEdit(); self.reg_input.setPlaceholderText("Addr, Data")
@@ -261,7 +293,6 @@ class SettingsDialog(QDialog):
         reg_layout.addLayout(echo_layout); reg_layout.addLayout(custom_layout)
         scroll_layout.addWidget(reg_group); scroll_layout.addStretch(); scroll.setWidget(scroll_content); main_layout.addWidget(scroll)
 
-        # Buttons
         btn_layout = QHBoxLayout(); btn_layout.setContentsMargins(5, 0, 5, 5)
         apply_btn = QPushButton("Apply"); apply_btn.setObjectName("applyBtn"); apply_btn.clicked.connect(self.handle_apply)
         cancel_btn = QPushButton("Cancel"); cancel_btn.clicked.connect(self.close)
@@ -298,6 +329,11 @@ class SettingsDialog(QDialog):
         self.main_app.connection_source = self.source_combo.currentText()
         self.main_app.serial_port_name = self.serial_combo.currentText()
         self.main_app.udp_port_num = int(self.udp_port_input.text()) if self.udp_port_input.text().isdigit() else 5005
+        
+        new_samples = int(self.res_combo.currentText())
+        if new_samples != self.main_app.current_max_samples:
+            self.main_app.change_resolution(new_samples)
+            
         speed = AIR_SPEED if self.speed_dropdown.currentIndex() == 0 else WATER_SPEED
         self.main_app.set_sound_speed(speed)
         self.main_app.large_depth_visible = self.large_depth_checkbox.isChecked()
@@ -321,10 +357,17 @@ class WaterfallApp(QMainWindow):
         self.nmea_output_enabled = False; self.nmea_port = 10110
         self.large_depth_visible = True; self.depth_overlay_mode = "Auto"
         self.show_depth_line = True; self.depth_line_mode = "Auto"
-        self.current_gradient = 'cyclic'; self.current_speed = SPEED_OF_SOUND 
-        self.current_zoom_samples = NUM_SAMPLES; self.min_zoom_samples = 200; self.lna_gain = 4 
-        self.saved_echo_thr = 16 
+        self.current_gradient = 'cyclic'; 
         
+        self.current_speed = SPEED_OF_SOUND 
+        self.current_max_samples = 2000 
+        self.current_zoom_samples = self.current_max_samples
+        self.lna_gain = 4 
+        self.saved_echo_thr = 16 
+        self.min_zoom_samples = 20 
+        
+        self.tvg_curve = np.linspace(1.0, TVG_STRENGTH, self.current_max_samples)
+
         self.setWindowTitle("Open Echo Interface"); self.resize(900, 550)
         self.setStyleSheet(f"""
             * {{ font-family: 'Malgun Gothic', Arial, sans-serif; }}
@@ -341,7 +384,9 @@ class WaterfallApp(QMainWindow):
             QLabel#footerLabel {{ background-color: transparent; color: #aaa; font-size: 10px; margin-right: 15px; }}
         """)
 
-        self.data = np.zeros((MAX_ROWS, NUM_SAMPLES)); self.depth_history = np.full(MAX_ROWS, np.nan)
+        self.data = np.zeros((MAX_ROWS, self.current_max_samples))
+        self.depth_history = np.full(MAX_ROWS, np.nan)
+        
         central = QWidget(); self.setCentralWidget(central)
         main_layout = QHBoxLayout(central); main_layout.setContentsMargins(0, 0, 0, 0); main_layout.setSpacing(0)
 
@@ -355,7 +400,9 @@ class WaterfallApp(QMainWindow):
         self.imageitem = pg.ImageItem(axisOrder="row-major"); self.waterfall.addItem(self.imageitem); self.waterfall.invertY(True)
         self.depth_overlay = pg.TextItem(anchor=(0, 1)); font = QFont("Malgun Gothic", 12); font.setWeight(QFont.DemiBold); self.depth_overlay.setFont(font); self.depth_overlay.setZValue(200); self.waterfall.addItem(self.depth_overlay)
         self.depth_line = pg.PlotCurveItem(pen=pg.mkPen(color='k', width=6)); self.depth_line.setZValue(50); self.waterfall.addItem(self.depth_line)
-        self.update_zoom_range(); self.set_sound_speed(self.current_speed)
+        
+        self.set_sound_speed(self.current_speed) 
+        
         left_layout.addWidget(self.waterfall)
 
         footer_frame = QFrame(); footer_frame.setObjectName("footerFrame"); footer_layout = QHBoxLayout(footer_frame); footer_layout.setContentsMargins(5, 2, 5, 2)
@@ -364,12 +411,15 @@ class WaterfallApp(QMainWindow):
         footer_layout.addWidget(self.lbl_footer_depth); footer_layout.addWidget(self.lbl_footer_ovr); footer_layout.addStretch()
         left_layout.addWidget(footer_frame); main_layout.addWidget(left_container, stretch=1)
 
-        self.colorbar = pg.HistogramLUTWidget(); self.colorbar.setImageItem(self.imageitem); self.colorbar.item.gradient.loadPreset("cyclic")
+        self.colorbar = pg.HistogramLUTWidget(); self.colorbar.setImageItem(self.imageitem); 
+        self.colorbar.item.gradient.loadPreset(self.current_gradient)
         sidebar = QFrame(); sidebar.setObjectName("sidebarFrame"); sidebar.setFixedWidth(110)
         side_layout = QVBoxLayout(sidebar); side_layout.setContentsMargins(0, 0, 0, 0); side_layout.setSpacing(0)
 
         self.btn_plus = QPushButton("+"); self.btn_plus.setProperty("class", "sidebar_btn"); self.btn_plus.setFixedHeight(60); self.btn_plus.clicked.connect(self.zoom_in); side_layout.addWidget(self.btn_plus)
         self.btn_minus = QPushButton("-"); self.btn_minus.setProperty("class", "sidebar_btn"); self.btn_minus.setFixedHeight(60); self.btn_minus.clicked.connect(self.zoom_out); side_layout.addWidget(self.btn_minus)
+        
+        self.btn_range = QPushButton("Range"); self.btn_range.setProperty("class", "sidebar_btn"); self.btn_range.setFixedHeight(60); self.btn_range.clicked.connect(self.show_range_menu); side_layout.addWidget(self.btn_range)
         self.btn_color = QPushButton("Color"); self.btn_color.setProperty("class", "sidebar_btn"); self.btn_color.setFixedHeight(60); self.btn_color.clicked.connect(self.show_color_menu); side_layout.addWidget(self.btn_color)
         
         self.lna_widget = GainGaugeWidget(); self.lna_widget.set_value(self.lna_gain); self.lna_widget.clicked.connect(self.cycle_lna_gain); side_layout.addWidget(self.lna_widget)
@@ -379,8 +429,42 @@ class WaterfallApp(QMainWindow):
         self.btn_connect = QPushButton("Connect"); self.btn_connect.setProperty("class", "sidebar_btn"); self.btn_connect.setFixedHeight(60); self.btn_connect.clicked.connect(self.handle_main_connect); side_layout.addWidget(self.btn_connect)
         main_layout.addWidget(sidebar)
 
+    def change_resolution(self, new_samples):
+        print(f"[System] Changing resolution to {new_samples} samples")
+        self.current_max_samples = new_samples
+        
+        self.data = np.zeros((MAX_ROWS, self.current_max_samples))
+        
+        # [修改] 重置深度線
+        self.depth_history = np.full(MAX_ROWS, np.nan)
+        self.depth_line.setData(x=np.arange(MAX_ROWS), y=self.depth_history, connect="finite")
+        
+        self.tvg_curve = np.linspace(1.0, TVG_STRENGTH, self.current_max_samples)
+        
+        if self.serial_thread and self.serial_thread.isRunning():
+            cmd = struct.pack('>B H', ord('N'), new_samples)
+            self.serial_thread.send_raw_command(cmd)
+            
+        self.current_zoom_samples = self.current_max_samples
+        self.update_zoom_range()
+
     def show_color_menu(self):
-        btn_pos = self.btn_color.mapToGlobal(QPoint(0, 0)); popup = ColorPopup(self.current_gradient, self); popup.colorSelected.connect(self.set_gradient)
+        btn_pos = self.btn_color.mapToGlobal(QPoint(0, 0)); popup = ColorPopup(self.current_gradient, self); popup.itemSelected.connect(self.set_gradient)
+        self.position_popup(popup, btn_pos)
+
+    def show_range_menu(self):
+        btn_pos = self.btn_range.mapToGlobal(QPoint(0, 0))
+        raw_options = RANGE_OPTIONS_AIR if self.current_speed == AIR_SPEED else RANGE_OPTIONS_WATER
+        max_phys_depth = (self.current_max_samples * SAMPLE_RESOLUTION) / 100.0
+        
+        valid_options = [opt for opt in raw_options if (opt * 4.0) <= max_phys_depth]
+        if not valid_options: valid_options = [raw_options[-1]]
+            
+        popup = RangePopup(self.current_zoom_samples, valid_options, self)
+        popup.itemSelected.connect(self.set_range_step)
+        self.position_popup(popup, btn_pos)
+
+    def position_popup(self, popup, btn_pos):
         popup.adjustSize(); x = btn_pos.x() - popup.width(); y = btn_pos.y()
         screen_geo = QApplication.desktop().availableGeometry(btn_pos)
         if y + popup.height() > screen_geo.bottom(): y = screen_geo.bottom() - popup.height() - 5
@@ -388,6 +472,12 @@ class WaterfallApp(QMainWindow):
         popup.move(x, y); popup.show()
 
     def set_gradient(self, n): self.current_gradient = n; self.colorbar.item.gradient.loadPreset(n)
+    
+    def set_range_step(self, val):
+        total_depth = val * 4.0
+        self.current_zoom_samples = (total_depth * 100.0) / SAMPLE_RESOLUTION
+        self.update_zoom_range()
+
     def cycle_lna_gain(self):
         self.lna_gain += 1; 
         if self.lna_gain > 4: self.lna_gain = 1
@@ -397,55 +487,69 @@ class WaterfallApp(QMainWindow):
             val = reg_map.get(self.lna_gain, 0x06)
             self.serial_thread.send_raw_command(struct.pack('BBB', ord('W'), 0x13, val))
 
-    def zoom_in(self): self.current_zoom_samples = max(self.min_zoom_samples, self.current_zoom_samples - 200); self.update_zoom_range()
-    def zoom_out(self): self.current_zoom_samples = min(NUM_SAMPLES, self.current_zoom_samples + 200); self.update_zoom_range()
+    def zoom_in(self): 
+        min_range_step = 0.1 
+        min_total_depth = min_range_step * 4.0
+        min_allowed_samples = (min_total_depth * 100.0) / SAMPLE_RESOLUTION
+        
+        if self.current_zoom_samples <= min_allowed_samples + 1.0: 
+            return
+
+        step = 200
+        self.current_zoom_samples = max(min_allowed_samples, self.current_zoom_samples - step)
+        self.update_zoom_range()
+    
+    def zoom_out(self): 
+        step = 200
+        self.current_zoom_samples = min(self.current_max_samples, self.current_zoom_samples + step)
+        self.update_zoom_range()
 
     def update_zoom_range(self):
         pad_top = self.current_zoom_samples * 0.02; pad_bottom = self.current_zoom_samples * 0.02 
         self.waterfall.setYRange(-pad_top, self.current_zoom_samples + pad_bottom, padding=0)
-        overlay_pos = self.current_zoom_samples - (self.current_zoom_samples * 0.02); self.depth_overlay.setPos(10, overlay_pos)
+        overlay_pos = self.current_zoom_samples - (self.current_zoom_samples * 0.05); self.depth_overlay.setPos(10, overlay_pos)
         
-        max_depth_m = (self.current_zoom_samples * SAMPLE_RESOLUTION) / 100.0
-        target_ticks = 8; raw_step = max_depth_m / target_ticks
-        mag = 10 ** np.floor(np.log10(raw_step)) if raw_step > 0 else 1; norm_step = raw_step / mag
-        if norm_step <= 1.0: nice_step = 1.0 * mag
-        elif norm_step <= 2.0: nice_step = 2.0 * mag
-        elif norm_step <= 5.0: nice_step = 5.0 * mag
-        else: nice_step = 10.0 * mag
+        total_depth_m = (self.current_zoom_samples * SAMPLE_RESOLUTION) / 100.0
+        step_m = total_depth_m / 4.0
         
-        tick_depths = np.arange(0, max_depth_m + nice_step, nice_step)
-        decimal_places = int(abs(np.floor(np.log10(nice_step)))) if nice_step < 1 else 0
-        fmt = f"{{:.{decimal_places}f}}"
-        ticks = []; 
+        tick_depths = [i * step_m for i in range(5)]
+        
+        ticks = []
+        fmt = "{:.1f}" if step_m < 1 else "{:.1f}" 
+        
         for d in tick_depths:
-            if d > max_depth_m: break
-            idx = (d * 100.0) / SAMPLE_RESOLUTION; ticks.append((idx, fmt.format(d)))
+            idx = (d * 100.0) / SAMPLE_RESOLUTION
+            ticks.append((idx, fmt.format(d)))
+            
         ax = self.waterfall.getAxis("right"); ax.setTicks([ticks])
+        
         for item in self.waterfall.items():
             if isinstance(item, pg.InfiniteLine) and item != self.depth_line: self.waterfall.removeItem(item)
         for idx, label in ticks:
-            if idx > 0: line = pg.InfiniteLine(pos=idx, angle=0, pen=pg.mkPen(color=(255,255,255,30), style=Qt.DashLine)); self.waterfall.addItem(line)
+            if idx > 0: 
+                line = pg.InfiniteLine(pos=idx, angle=0, pen=pg.mkPen(color=(150,150,150,150), style=Qt.DashLine))
+                self.waterfall.addItem(line)
 
-    def waterfall_plot_callback(self, spectrogram, depth_index, drive_frequency, override_idx):
-        filtered = sonar_display_pipeline(spectrogram)
+    def waterfall_plot_callback(self, raw_data, depth_index, drive_frequency, override_idx):
+        if len(raw_data) != self.current_max_samples:
+            if abs(len(raw_data) - self.current_max_samples) > 0:
+                 self.current_max_samples = len(raw_data)
+                 self.data = np.zeros((MAX_ROWS, self.current_max_samples))
+                 self.tvg_curve = np.linspace(1.0, TVG_STRENGTH, self.current_max_samples)
+                 # [修改] 自動重置深度線 (當收到非預期長度的封包時)
+                 self.depth_history = np.full(MAX_ROWS, np.nan)
+                 self.depth_line.setData(x=np.arange(MAX_ROWS), y=self.depth_history, connect="finite")
+
+        filtered = sonar_display_pipeline(raw_data, self.tvg_curve)
         self.data = np.roll(self.data, -1, axis=0); self.data[-1, :] = filtered
         self.imageitem.setImage(self.data.T, autoLevels=False); self.imageitem.setLevels((10, 220))
         depth_m, ovr_m = (depth_index * SAMPLE_RESOLUTION) / 100.0, (override_idx * SAMPLE_RESOLUTION) / 100.0
         
-        # 1. 基礎有效性
         not_blind = (depth_index > PYTHON_IGNORE_INDEX)
-        
-        # 2. 一致性檢查
         diff = abs(int(depth_index) - int(override_idx))
         is_consistent = (diff <= INDEX_TOLERANCE)
-        
-        # 3. 可靠性 (Reliability): 硬體有訊號 且 與軟體計算接近
         is_reliable = not_blind and is_consistent
-        
-        # 4. 決定目標值 (顯示的數字)
         target_depth_idx = depth_index if self.depth_line_mode == "Auto" else override_idx
-        
-        # 5. 決定是否畫線 (只要不可靠 -> 就不畫線)
         val_to_plot = target_depth_idx if is_reliable else np.nan
 
         self.depth_history = np.roll(self.depth_history, -1); self.depth_history[-1] = val_to_plot
@@ -454,16 +558,11 @@ class WaterfallApp(QMainWindow):
         else: self.depth_line.hide()
 
         if self.large_depth_visible:
-            # 6. 文字顏色: 可靠=白, 不可靠=灰
             color_hex = "#FFFFFF" if is_reliable else "rgba(255, 255, 255, 0.2)" 
-            
-            # 7. 顯示數值: 永遠顯示 Mode 對應的數值 (即便它是錯的/灰的)
             display_val_m = (target_depth_idx * SAMPLE_RESOLUTION) / 100.0
-            
             freq_text = f"&nbsp;&nbsp;{drive_frequency:.0f}kHz"
             html_str = f"""<div style="text-align: left; line-height: 90%; font-family: 'Malgun Gothic';"><span style="font-size: 64pt; font-weight: 600; color: {color_hex};">{display_val_m:.1f}</span><span style="font-size: 32pt; font-weight: 600; color: {color_hex};">m</span><br><span style="font-size: 10pt; color: #cccccc; font-weight: 600;">{freq_text}</span></div>"""
-            overlay_pos = self.current_zoom_samples - (self.current_zoom_samples * 0.02)
-            self.depth_overlay.setPos(10, overlay_pos); self.depth_overlay.setHtml(html_str)
+            self.depth_overlay.setHtml(html_str)
 
         self.lbl_footer_depth.setText(f"Depth: {depth_m * 100:.0f} cm"); self.lbl_footer_ovr.setText(f"Override: {ovr_m * 100:.0f} cm")
 
@@ -471,8 +570,19 @@ class WaterfallApp(QMainWindow):
         global SPEED_OF_SOUND, SAMPLE_RESOLUTION, MAX_DEPTH
         SPEED_OF_SOUND = self.current_speed = speed
         SAMPLE_RESOLUTION = (SPEED_OF_SOUND * SAMPLE_TIME * 100) / 2
-        MAX_DEPTH = NUM_SAMPLES * SAMPLE_RESOLUTION
+        MAX_DEPTH = self.current_max_samples * SAMPLE_RESOLUTION 
         ax = self.waterfall.getAxis("right"); ax.setTickFont(QFont("Arial", 10))
+        
+        raw_options = RANGE_OPTIONS_AIR if speed == AIR_SPEED else RANGE_OPTIONS_WATER
+        max_phys_depth = (self.current_max_samples * SAMPLE_RESOLUTION) / 100.0
+        
+        valid_options = [opt for opt in raw_options if (opt * 4.0) <= max_phys_depth]
+        if valid_options:
+            init_interval = valid_options[0] 
+        else:
+            init_interval = raw_options[-1] 
+            
+        self.current_zoom_samples = (init_interval * 4.0 * 100.0) / SAMPLE_RESOLUTION
         self.update_zoom_range()
 
     def handle_main_connect(self):
@@ -486,14 +596,16 @@ class WaterfallApp(QMainWindow):
                 if not self.serial_port_name or self.serial_port_name == "No Ports": return print("No Serial Port Selected")
                 self.serial_thread = SerialReader(self.serial_port_name, BAUD_RATE); self.serial_thread.data_received.connect(self.waterfall_plot_callback); self.serial_thread.start()
                 
-                QThread.msleep(2000) # [關鍵] 等待 2000ms 讓 Arduino 開機完畢
+                QThread.msleep(2000) 
                 
-                # [關鍵] 連線時同步發送當前選定的 LNA Gain
+                cmd = struct.pack('>B H', ord('N'), self.current_max_samples)
+                self.serial_thread.send_raw_command(cmd)
+                QThread.msleep(100) 
+                
                 reg_map = {1: 0x05, 2: 0x07, 3: 0x04, 4: 0x06}
                 val = reg_map.get(self.lna_gain, 0x06)
                 self.serial_thread.send_raw_command(struct.pack('BBB', ord('W'), 0x13, val))
                 
-                # 同步發送記憶的 Echo Thr
                 data = (self.saved_echo_thr - 1) | 0x10; addr = 0x17
                 self.serial_thread.send_raw_command(struct.pack('BBB', ord('W'), addr, data))
                 
