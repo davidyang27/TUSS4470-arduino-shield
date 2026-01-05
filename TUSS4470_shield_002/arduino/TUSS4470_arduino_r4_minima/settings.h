@@ -22,7 +22,7 @@ const int DRIVE_FREQUENCY_TIMER_DIVIDER = (16000000 / (2 * DRIVE_FREQUENCY)) - 1
 // Each sample takes approximately 13.2 microseconds
 // This value must match the number of samples expected by the Python visualization tool
 // Max 1800 on R3, ~10000 on R4
-#define NUM_SAMPLES 18000
+// #define NUM_SAMPLES 2000
 
 // Number of initial samples to ignore after sending the transducer pulse
 // These ignored samples represent the "blind zone" where the transducer is still ringing
