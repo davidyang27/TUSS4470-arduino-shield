@@ -45,7 +45,6 @@ TVG_STRENGTH = 1.2
 SIDEBAR_BTN_FONT_SIZE = 15
 COLOR_MAPS = ["viridis", "plasma", "inferno", "magma", "thermal", "flame", "yellowy", "bipolar", "spectrum", "cyclic", "greyclip", "grey"]
 
-# [修改] 更新 Range 選項: 移除 2.5，加入 4.0, 3.0, 2.0
 RANGE_OPTIONS_AIR = [10.0, 5.0, 4.0, 3.0, 2.0, 1.0, 0.5, 0.1]
 RANGE_OPTIONS_WATER = [40.0, 20.0, 10.0, 5.0, 4.0, 3.0, 2.0, 1.0]
 
@@ -325,6 +324,7 @@ class SettingsDialog(QDialog):
             print(f"[System] Sent: Addr={hex(addr)}, Data={hex(data)}")
         except Exception as e: print(f"[System] Error: {e}")
 
+    # [關鍵修改] 只有當 speed 真正改變時，才呼叫 set_sound_speed
     def handle_apply(self):
         self.main_app.connection_source = self.source_combo.currentText()
         self.main_app.serial_port_name = self.serial_combo.currentText()
@@ -335,7 +335,10 @@ class SettingsDialog(QDialog):
             self.main_app.change_resolution(new_samples)
             
         speed = AIR_SPEED if self.speed_dropdown.currentIndex() == 0 else WATER_SPEED
-        self.main_app.set_sound_speed(speed)
+        # [Check] 防止不必要的重置
+        if speed != self.main_app.current_speed:
+            self.main_app.set_sound_speed(speed)
+            
         self.main_app.large_depth_visible = self.large_depth_checkbox.isChecked()
         self.main_app.depth_overlay.setVisible(self.main_app.large_depth_visible)
         self.main_app.depth_overlay_mode = "Auto" if self.overlay_mode_combo.currentIndex() == 0 else "Override"
@@ -357,7 +360,7 @@ class WaterfallApp(QMainWindow):
         self.nmea_output_enabled = False; self.nmea_port = 10110
         self.large_depth_visible = True; self.depth_overlay_mode = "Auto"
         self.show_depth_line = True; self.depth_line_mode = "Auto"
-        self.current_gradient = 'cyclic'; 
+        self.current_gradient = 'viridis'; 
         
         self.current_speed = SPEED_OF_SOUND 
         self.current_max_samples = 2000 
@@ -435,7 +438,6 @@ class WaterfallApp(QMainWindow):
         
         self.data = np.zeros((MAX_ROWS, self.current_max_samples))
         
-        # [修改] 重置深度線
         self.depth_history = np.full(MAX_ROWS, np.nan)
         self.depth_line.setData(x=np.arange(MAX_ROWS), y=self.depth_history, connect="finite")
         
@@ -536,7 +538,6 @@ class WaterfallApp(QMainWindow):
                  self.current_max_samples = len(raw_data)
                  self.data = np.zeros((MAX_ROWS, self.current_max_samples))
                  self.tvg_curve = np.linspace(1.0, TVG_STRENGTH, self.current_max_samples)
-                 # [修改] 自動重置深度線 (當收到非預期長度的封包時)
                  self.depth_history = np.full(MAX_ROWS, np.nan)
                  self.depth_line.setData(x=np.arange(MAX_ROWS), y=self.depth_history, connect="finite")
 
