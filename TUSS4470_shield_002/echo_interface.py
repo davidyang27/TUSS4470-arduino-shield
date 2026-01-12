@@ -21,19 +21,21 @@ import pyqtgraph as pg
 # --- 全域配置參數 ---
 # ============================================================
 AIR_SPEED = 343.0      
-WATER_SPEED = 1440.0   
+WATER_SPEED = 1500.0   
 DEFAULT_ENVIRONMENT = 'AIR' 
 
 BAUD_RATE = 2000000 
 MAX_ROWS = 300
 Y_LABEL_DISTANCE = 50  
-SAMPLE_TIME = 13.2e-6
 DEFAULT_LEVELS = (0, 256)
 
 PYTHON_IGNORE_INDEX = 20
 INDEX_TOLERANCE = 50
 
+# [修改] 這些變數現在會動態計算
 SPEED_OF_SOUND = AIR_SPEED if DEFAULT_ENVIRONMENT == 'AIR' else WATER_SPEED 
+CURRENT_SAMPLE_DELAY_US = 11.5 # 預設值 (Standard)
+SAMPLE_TIME = (CURRENT_SAMPLE_DELAY_US + 3.4) * 1e-6 # us to seconds
 SAMPLE_RESOLUTION = (SPEED_OF_SOUND * SAMPLE_TIME * 100) / 2
 
 DISPLAY_GAIN = 1.3
@@ -47,6 +49,14 @@ COLOR_MAPS = ["viridis", "plasma", "inferno", "magma", "thermal", "flame", "yell
 
 RANGE_OPTIONS_AIR = [10.0, 5.0, 4.0, 3.0, 2.0, 1.0, 0.5, 0.1]
 RANGE_OPTIONS_WATER = [40.0, 20.0, 10.0, 5.0, 4.0, 3.0, 2.0, 1.0]
+
+# [新增] 採樣速度選項定義
+# 格式: (顯示名稱, Delay微秒數)
+SPEED_OPTIONS = [
+    ("Standard (11.5us)", 11.5), # 預設高解析
+    ("Long Range (25us)", 25.0), # 中距離
+    ("Ultra Range (50us)", 50.0) # 長距離低解析
+]
 
 # --- 輔助函式 ---
 def read_packet(ser):
@@ -259,11 +269,26 @@ class SettingsDialog(QDialog):
         # 2. Display
         disp_group = QGroupBox("DISPLAY"); disp_layout = QFormLayout(disp_group); disp_layout.setContentsMargins(8, 8, 8, 8); disp_layout.setVerticalSpacing(6)
         self.speed_dropdown = QComboBox(); self.speed_dropdown.addItems([f"{AIR_SPEED} m/s (Air)", f"{WATER_SPEED} m/s (Water)"]); self.speed_dropdown.setCurrentIndex(1 if self.main_app.current_speed == WATER_SPEED else 0)
+        
+        # [新增] Sampling Speed 下拉選單
+        self.delay_combo = QComboBox()
+        for label, val in SPEED_OPTIONS:
+            self.delay_combo.addItem(label, val)
+        # 找目前的 Delay 對應哪個選項
+        curr_delay = self.main_app.current_sample_delay
+        for i in range(self.delay_combo.count()):
+            if abs(self.delay_combo.itemData(i) - curr_delay) < 0.1:
+                self.delay_combo.setCurrentIndex(i)
+                break
+        
         self.large_depth_checkbox = QCheckBox("Show Depth"); self.large_depth_checkbox.setChecked(self.main_app.large_depth_visible)
         self.overlay_mode_combo = QComboBox(); self.overlay_mode_combo.addItems(["Auto (Threshold)", "Override (Max)"]); self.overlay_mode_combo.setCurrentIndex(0 if self.main_app.depth_overlay_mode == "Auto" else 1)
         self.show_line_checkbox = QCheckBox("Show Depth Profile"); self.show_line_checkbox.setChecked(self.main_app.show_depth_line)
         self.line_mode_combo = QComboBox(); self.line_mode_combo.addItems(["Follow Auto", "Follow Override"]); self.line_mode_combo.setCurrentIndex(0 if self.main_app.depth_line_mode == "Auto" else 1)
-        disp_layout.addRow("Env:", self.speed_dropdown); disp_layout.addRow(self.large_depth_checkbox); disp_layout.addRow("Src:", self.overlay_mode_combo); disp_layout.addRow(self.show_line_checkbox); disp_layout.addRow("Line:", self.line_mode_combo)
+        
+        disp_layout.addRow("Env:", self.speed_dropdown)
+        disp_layout.addRow("Speed:", self.delay_combo) # Add to UI
+        disp_layout.addRow(self.large_depth_checkbox); disp_layout.addRow("Src:", self.overlay_mode_combo); disp_layout.addRow(self.show_line_checkbox); disp_layout.addRow("Line:", self.line_mode_combo)
         scroll_layout.addWidget(disp_group)
 
         # 3. NMEA
@@ -324,7 +349,6 @@ class SettingsDialog(QDialog):
             print(f"[System] Sent: Addr={hex(addr)}, Data={hex(data)}")
         except Exception as e: print(f"[System] Error: {e}")
 
-    # [關鍵修改] 只有當 speed 真正改變時，才呼叫 set_sound_speed
     def handle_apply(self):
         self.main_app.connection_source = self.source_combo.currentText()
         self.main_app.serial_port_name = self.serial_combo.currentText()
@@ -334,8 +358,12 @@ class SettingsDialog(QDialog):
         if new_samples != self.main_app.current_max_samples:
             self.main_app.change_resolution(new_samples)
             
+        # [新增] 處理 Sample Delay (Speed) 變更
+        new_delay = self.delay_combo.currentData()
+        if abs(new_delay - self.main_app.current_sample_delay) > 0.1:
+            self.main_app.set_sample_delay(new_delay)
+
         speed = AIR_SPEED if self.speed_dropdown.currentIndex() == 0 else WATER_SPEED
-        # [Check] 防止不必要的重置
         if speed != self.main_app.current_speed:
             self.main_app.set_sound_speed(speed)
             
@@ -360,7 +388,7 @@ class WaterfallApp(QMainWindow):
         self.nmea_output_enabled = False; self.nmea_port = 10110
         self.large_depth_visible = True; self.depth_overlay_mode = "Auto"
         self.show_depth_line = True; self.depth_line_mode = "Auto"
-        self.current_gradient = 'viridis'; 
+        self.current_gradient = 'cyclic'; 
         
         self.current_speed = SPEED_OF_SOUND 
         self.current_max_samples = 2000 
@@ -368,6 +396,9 @@ class WaterfallApp(QMainWindow):
         self.lna_gain = 4 
         self.saved_echo_thr = 16 
         self.min_zoom_samples = 20 
+        
+        # [新增] 內部變數儲存 Delay
+        self.current_sample_delay = CURRENT_SAMPLE_DELAY_US
         
         self.tvg_curve = np.linspace(1.0, TVG_STRENGTH, self.current_max_samples)
 
@@ -448,6 +479,26 @@ class WaterfallApp(QMainWindow):
             self.serial_thread.send_raw_command(cmd)
             
         self.current_zoom_samples = self.current_max_samples
+        self.update_zoom_range()
+
+    # [新增] 設定 Sample Delay
+    def set_sample_delay(self, delay_us):
+        global SAMPLE_TIME, SAMPLE_RESOLUTION
+        
+        print(f"[System] Changing sample delay to {delay_us} us")
+        self.current_sample_delay = delay_us
+        
+        # 1. 更新全域變數
+        SAMPLE_TIME = delay_us * 1e-6
+        SAMPLE_RESOLUTION = (self.current_speed * SAMPLE_TIME * 100) / 2
+        
+        # 2. 發送指令給 Arduino ('D' + val)
+        if self.serial_thread and self.serial_thread.isRunning():
+            val = int(delay_us)
+            cmd = struct.pack('BBB', ord('D'), val, 0) # 0 is dummy
+            self.serial_thread.send_raw_command(cmd)
+            
+        # 3. 畫面更新
         self.update_zoom_range()
 
     def show_color_menu(self):
@@ -568,10 +619,11 @@ class WaterfallApp(QMainWindow):
         self.lbl_footer_depth.setText(f"Depth: {depth_m * 100:.0f} cm"); self.lbl_footer_ovr.setText(f"Override: {ovr_m * 100:.0f} cm")
 
     def set_sound_speed(self, speed):
-        global SPEED_OF_SOUND, SAMPLE_RESOLUTION, MAX_DEPTH
+        global SPEED_OF_SOUND, SAMPLE_RESOLUTION
         SPEED_OF_SOUND = self.current_speed = speed
+        # [修改] 重新計算解析度 (因為 speed 或 delay 改變)
         SAMPLE_RESOLUTION = (SPEED_OF_SOUND * SAMPLE_TIME * 100) / 2
-        MAX_DEPTH = self.current_max_samples * SAMPLE_RESOLUTION 
+        
         ax = self.waterfall.getAxis("right"); ax.setTickFont(QFont("Arial", 10))
         
         raw_options = RANGE_OPTIONS_AIR if speed == AIR_SPEED else RANGE_OPTIONS_WATER
@@ -599,14 +651,24 @@ class WaterfallApp(QMainWindow):
                 
                 QThread.msleep(2000) 
                 
+                # 同步所有設定
+                # 1. Samples
                 cmd = struct.pack('>B H', ord('N'), self.current_max_samples)
                 self.serial_thread.send_raw_command(cmd)
-                QThread.msleep(100) 
+                QThread.msleep(50)
                 
+                # 2. Delay (Speed)
+                val = int(self.current_sample_delay)
+                cmd = struct.pack('BBB', ord('D'), val, 0)
+                self.serial_thread.send_raw_command(cmd)
+                QThread.msleep(50)
+                
+                # 3. LNA
                 reg_map = {1: 0x05, 2: 0x07, 3: 0x04, 4: 0x06}
                 val = reg_map.get(self.lna_gain, 0x06)
                 self.serial_thread.send_raw_command(struct.pack('BBB', ord('W'), 0x13, val))
                 
+                # 4. Threshold
                 data = (self.saved_echo_thr - 1) | 0x10; addr = 0x17
                 self.serial_thread.send_raw_command(struct.pack('BBB', ord('W'), addr, data))
                 
