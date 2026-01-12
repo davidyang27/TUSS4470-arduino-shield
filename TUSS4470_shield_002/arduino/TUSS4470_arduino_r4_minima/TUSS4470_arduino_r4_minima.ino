@@ -3,8 +3,18 @@
 #include <FspTimer.h>
 
 // ---------------------- CONFIG ----------------------
-#define MAX_SAMPLES 18000 // 靜態分配最大記憶體 (32KB SRAM 足夠)
-volatile uint16_t currentNumSamples = 2000; // 預設啟動時的採樣數
+#define MAX_SAMPLES 18000 // 靜態分配最大記憶體
+volatile uint16_t currentNumSamples = 2000; // 預設採樣數
+volatile uint8_t  currentSampleDelay = 11;  // 預設採樣延遲 (對應 Standard)
+
+// [新增] 盲區計算參數
+// 您原本覺得 90 點在 delay(11) 時是足夠的
+// 實際每點時間 = 11.5 + 3.4 = 14.9 us
+// 總餘震時間 = 90 * 14.9 = 1341 us
+const float ADC_OVERHEAD = 3.4f; 
+const float RINGING_DURATION_US = 90 * (11.5f + ADC_OVERHEAD); 
+
+volatile int currentBlindZone = 90; // 這個值會動態改變
 
 // ---------------------- PIN CONFIGURATION ----------------------
 const int SPI_CS = 10;
@@ -24,17 +34,16 @@ const int analogIn = A0;
 #define ADDR09     (*(volatile uint16_t *)(ADC_BASE + 0xC020u + 18))
 
 // ---------------------- DATA STRUCTURE ----------------------
-// [修改] Header 加入 num_samples
 struct __attribute__((packed)) Header {
   uint8_t  start = 0xAA;
   uint16_t depth_index;            
   int16_t  temp_scaled;     
   uint16_t vDrv_scaled;
-  uint16_t num_samples; // 告訴 Python 這次後面跟著多少數據
+  uint16_t num_samples; 
 };
 
 Header header;
-uint8_t sampleBuffer[MAX_SAMPLES]; // 固定分配最大空間
+uint8_t sampleBuffer[MAX_SAMPLES]; 
 
 // ---------------------- GLOBALS ----------------------
 byte misoBuf[2];  
@@ -71,6 +80,16 @@ void stopTransducer() {
   burstTimer.stop();
   pulseCount = 0;
   digitalWrite(IO2, LOW); 
+}
+
+// [新增] 動態計算盲區點數
+void calcBlindZone() {
+  // 總餘震時間 / (當前Delay + 硬體開銷) = 需要避開的點數
+  float timePerSample = (float)currentSampleDelay + ADC_OVERHEAD;
+  currentBlindZone = (int)(RINGING_DURATION_US / timePerSample);
+  
+  // 安全限制，至少避開前 5 點
+  if (currentBlindZone < 5) currentBlindZone = 5;
 }
 
 unsigned int BitShiftCombine(unsigned char x_high, unsigned char x_low) {
@@ -115,7 +134,7 @@ byte tuss4470Parity(byte* spi16Val) {
 
 void setup()
 {
-  Serial.begin(2000000); // 2M Baud
+  Serial.begin(2000000); 
 
   SPI.begin();
   SPI.beginTransaction(SPISettings(1000000, MSBFIRST, SPI_MODE1)); 
@@ -146,6 +165,9 @@ void setup()
   ADANSA0 = (1u << 9);    
   ADCER = 0x0000;         
   ADCSR &= ~(1u << 5);    
+  
+  // 初始化盲區計算
+  calcBlindZone();
 }
 
 void loop()
@@ -156,16 +178,16 @@ void loop()
   tuss4470Write(0x1B, 0x01);
   burstTimer.start();
 
-  // [關鍵] 使用 currentNumSamples 進行迴圈
   for (sampleIndex = 0; sampleIndex < currentNumSamples; sampleIndex++) {
     ADCSR |= (1u << 15);        
     while (ADCSR & (1u << 15));  
     
     sampleBuffer[sampleIndex] = ADDR09 >> 4; 
 
-    delayMicroseconds(11.5); 
+    delayMicroseconds(currentSampleDelay); 
 
-    if (sampleIndex == BLINDZONE_SAMPLE_END) {
+    // [修改] 使用動態計算的 currentBlindZone
+    if (sampleIndex == currentBlindZone) {
       detectedDepth = false;
       depthDetectSample = 0;
     }
@@ -176,7 +198,8 @@ void loop()
   #if USE_DEPTH_OVERRIDE
   int overrideSample = 0;
   uint8_t max = 0;
-  for (int i = BLINDZONE_SAMPLE_END; i < currentNumSamples; i++) {
+  // [修改] 使用 currentBlindZone
+  for (int i = currentBlindZone; i < currentNumSamples; i++) {
     if (sampleBuffer[i] > max) {
       max = sampleBuffer[i];
       overrideSample = i;
@@ -203,7 +226,7 @@ void loop()
       stopTransducer(); 
       tuss4470Write(addr, data);
     }
-    else if (cmd == 'N') { // [新增] 設定 Num Samples 指令
+    else if (cmd == 'N') { 
       byte high = Serial.read();
       byte low = Serial.read();
       uint16_t newSamples = (high << 8) | low;
@@ -213,6 +236,15 @@ void loop()
       
       currentNumSamples = newSamples;
     }
+    else if (cmd == 'D') { 
+      byte val = Serial.read();
+      byte dummy = Serial.read(); 
+      
+      if (val < 5) val = 5;
+      
+      currentSampleDelay = val;
+      calcBlindZone(); // [新增] 當 Delay 改變時，重新計算 Blind Zone 點數
+    }
   }
 
   delay(10);
@@ -221,7 +253,7 @@ void loop()
 void sendData() {
   header.depth_index = depthDetectSample;
   header.temp_scaled = (int16_t)(DRIVE_FREQUENCY / 1000); 
-  header.num_samples = currentNumSamples; // 告訴 Python 這次的長度
+  header.num_samples = currentNumSamples; 
   
   uint8_t cs = 0;
   cs ^= (uint8_t)(header.depth_index & 0xFF);
@@ -230,23 +262,20 @@ void sendData() {
   cs ^= (uint8_t)(header.temp_scaled >> 8);
   cs ^= (uint8_t)(header.vDrv_scaled & 0xFF);
   cs ^= (uint8_t)(header.vDrv_scaled >> 8);
-  cs ^= (uint8_t)(header.num_samples & 0xFF); // 加入 num_samples 到校驗
+  cs ^= (uint8_t)(header.num_samples & 0xFF); 
   cs ^= (uint8_t)(header.num_samples >> 8);
   
   for (int i = 0; i < currentNumSamples; i++) {
     cs ^= sampleBuffer[i];
   }
   
-  // Header: 1(AA) + 2(depth) + 2(temp) + 2(vdrv) + 2(num) = 9 bytes
   Serial.write(header.start);
   Serial.write((uint8_t*)&header.depth_index, 2);
   Serial.write((uint8_t*)&header.temp_scaled, 2);
   Serial.write((uint8_t*)&header.vDrv_scaled, 2);
   Serial.write((uint8_t*)&header.num_samples, 2);
   
-  // Data
   Serial.write(sampleBuffer, currentNumSamples);
   
-  // Checksum
   Serial.write(cs);
 }
