@@ -7,15 +7,20 @@ import time
 import socket
 import queue
 import os
-from PyQt5.QtWidgets import (
-    QApplication, QMainWindow, QVBoxLayout, QWidget, QComboBox, 
-    QPushButton, QLabel, QLineEdit, QHBoxLayout, QCheckBox, 
-    QDialog, QFormLayout, QFrame, QSizePolicy, QGroupBox, QScrollArea
-)
-from PyQt5.QtCore import QThread, pyqtSignal, Qt, QSize, QRectF, QPoint
-from PyQt5.QtGui import QPalette, QColor, QFont, QPainter, QPen, QBrush
 
-import pyqtgraph as pg
+# 嘗試匯入 PyQt5，失敗則提示
+try:
+    from PyQt5.QtWidgets import (
+        QApplication, QMainWindow, QVBoxLayout, QWidget, QComboBox, 
+        QPushButton, QLabel, QLineEdit, QHBoxLayout, QCheckBox, 
+        QDialog, QFormLayout, QFrame, QSizePolicy, QGroupBox, QScrollArea, QMessageBox
+    )
+    from PyQt5.QtCore import QThread, pyqtSignal, Qt, QSize, QRectF, QPoint, QTimer
+    from PyQt5.QtGui import QPalette, QColor, QFont, QPainter, QPen, QBrush
+    import pyqtgraph as pg
+except ImportError as e:
+    print(f"CRITICAL ERROR: Missing libraries. {e}")
+    sys.exit(1)
 
 # ============================================================
 # --- 全域配置參數 ---
@@ -32,10 +37,10 @@ DEFAULT_LEVELS = (0, 256)
 PYTHON_IGNORE_INDEX = 20
 INDEX_TOLERANCE = 50
 
-# [修改] 這些變數現在會動態計算
+# 動態參數初始值
 SPEED_OF_SOUND = AIR_SPEED if DEFAULT_ENVIRONMENT == 'AIR' else WATER_SPEED 
-CURRENT_SAMPLE_DELAY_US = 11.5 # 預設值 (Standard)
-SAMPLE_TIME = (CURRENT_SAMPLE_DELAY_US + 3.4) * 1e-6 # us to seconds
+CURRENT_SAMPLE_DELAY_US = 11.5 
+SAMPLE_TIME = (CURRENT_SAMPLE_DELAY_US + 3.4) * 1e-6 
 SAMPLE_RESOLUTION = (SPEED_OF_SOUND * SAMPLE_TIME * 100) / 2
 
 DISPLAY_GAIN = 1.3
@@ -44,30 +49,40 @@ DESPECKLE_THRESHOLD = 10
 SMOOTH_ALPHA = 0.25
 TVG_STRENGTH = 1.2
 
+# [渲染優化參數]
+MAX_DISPLAY_SAMPLES = 2000 
+FPS_LIMIT = 30             
+
 SIDEBAR_BTN_FONT_SIZE = 15
-COLOR_MAPS = ["viridis", "plasma", "inferno", "magma", "thermal", "flame", "yellowy", "bipolar", "spectrum", "cyclic", "greyclip", "grey"]
+COLOR_MAPS = ["thermal", "flame", "yellowy", "bipolar", "spectrum", "cyclic", "greyclip", "grey", "viridis", "plasma", "inferno", "magma"]
 
 RANGE_OPTIONS_AIR = [10.0, 5.0, 4.0, 3.0, 2.0, 1.0, 0.5, 0.1]
 RANGE_OPTIONS_WATER = [40.0, 20.0, 10.0, 5.0, 4.0, 3.0, 2.0, 1.0]
 
-# [新增] 採樣速度選項定義
-# 格式: (顯示名稱, Delay微秒數)
 SPEED_OPTIONS = [
-    ("Standard (11.5us)", 11.5), # 預設高解析
-    ("Long Range (25us)", 25.0), # 中距離
-    ("Ultra Range (50us)", 50.0) # 長距離低解析
+    ("Standard (11.5us)", 11.5), 
+    ("Long Range (25us)", 25.0), 
+    ("Ultra Range (50us)", 50.0) 
 ]
 
 # --- 輔助函式 ---
 def read_packet(ser):
-    if ser.in_waiting == 0: 
-        return None
+    if ser.in_waiting == 0: return None
     
     header_bytes = ser.read(9)
     if len(header_bytes) != 9: return None
-    if header_bytes[0] != 0xAA: return None 
+    if header_bytes[0] != 0xAA: 
+        ser.read(ser.in_waiting) # Sync Error
+        return None 
     
-    start, depth, freq_scaled, vDrv_scaled, num_samples = struct.unpack("<BHhHH", header_bytes)
+    try:
+        start, depth, freq_scaled, vDrv_scaled, num_samples = struct.unpack("<BHhHH", header_bytes)
+    except: return None
+
+    # 安全保護
+    if num_samples > 20000 or num_samples < 10:
+        ser.read(ser.in_waiting)
+        return None
     
     payload = ser.read(num_samples)
     if len(payload) != num_samples: return None
@@ -79,8 +94,7 @@ def read_packet(ser):
     for b in header_bytes[1:]: calc_checksum ^= b
     for b in payload: calc_checksum ^= b
     
-    if calc_checksum != checksum_bytes[0]: 
-        return None
+    if calc_checksum != checksum_bytes[0]: return None
         
     values = np.frombuffer(payload, dtype=np.uint8, count=num_samples)
     return values, min(depth, num_samples), freq_scaled, float(vDrv_scaled)
@@ -89,20 +103,24 @@ def get_serial_ports():
     ports = [port.device for port in serial.tools.list_ports.comports()]
     return ports if ports else ["No Ports"]
 
-def sonar_display_pipeline(raw_line, tvg_curve):
-    line = raw_line.astype(np.float32)
-    line = np.clip(line * DISPLAY_GAIN, 0, 255)
-    out = line.copy()
-    half = DESPECKLE_WINDOW // 2
-    for i in range(half, len(line) - half):
-        local = line[i - half:i + half + 1]
-        local_mean = np.mean(local)
-        if line[i] > local_mean + DESPECKLE_THRESHOLD and local_mean < DESPECKLE_THRESHOLD:
-            out[i] = 0
-    line = out
+# [優化] 使用 Numpy 向量化取代 Python 迴圈
+def sonar_display_pipeline_optimized(raw_line, tvg_curve):
+    # 1. Gain & Clip
+    line = raw_line.astype(np.float32) * DISPLAY_GAIN
+    np.clip(line, 0, 255, out=line)
+    
+    # 2. Despeckle (使用卷積運算)
+    if len(line) > DESPECKLE_WINDOW:
+        kernel = np.ones(DESPECKLE_WINDOW) / DESPECKLE_WINDOW
+        local_mean = np.convolve(line, kernel, mode='same')
+        mask = (line > (local_mean + DESPECKLE_THRESHOLD)) & (local_mean < DESPECKLE_THRESHOLD)
+        line[mask] = 0
+    
+    # 3. Smoothing (簡單平滑)
     for i in range(1, len(line)):
         line[i] = SMOOTH_ALPHA * line[i] + (1 - SMOOTH_ALPHA) * line[i - 1]
-    
+
+    # 4. TVG
     if len(tvg_curve) == len(line):
         line *= tvg_curve
         
@@ -128,10 +146,13 @@ class ColorPopup(BasePopup):
         super().__init__(parent)
         layout = QVBoxLayout(self); layout.setContentsMargins(0, 0, 0, 0); layout.setSpacing(0)
         for name in COLOR_MAPS:
-            btn = QPushButton(name.capitalize())
-            if name == current: btn.setProperty("active", True)
-            btn.clicked.connect(lambda checked, n=name: self.handle_click(n))
-            layout.addWidget(btn)
+            try:
+                pg.graphicsItems.GradientEditorItem.Gradients[name]
+                btn = QPushButton(name.capitalize())
+                if name == current: btn.setProperty("active", True)
+                btn.clicked.connect(lambda checked, n=name: self.handle_click(n))
+                layout.addWidget(btn)
+            except: continue
         self.setFixedWidth(110)
     def handle_click(self, name): self.itemSelected.emit(name); self.close()
 
@@ -140,8 +161,10 @@ class RangePopup(BasePopup):
     def __init__(self, current_val, options, parent=None):
         super().__init__(parent)
         layout = QVBoxLayout(self); layout.setContentsMargins(0, 0, 0, 0); layout.setSpacing(0)
-        total_depth_m = (parent.current_zoom_samples * SAMPLE_RESOLUTION) / 100.0
-        current_step_approx = total_depth_m / 4.0
+        try:
+            total_depth_m = (parent.current_zoom_samples * SAMPLE_RESOLUTION) / 100.0
+            current_step_approx = total_depth_m / 4.0
+        except: current_step_approx = 0
         for val in options:
             if val < 1.0: text = f"{val*100:.0f} cm"
             else: text = f"{val:.1f} m" if val % 1 != 0 else f"{val:.0f} m"
@@ -185,7 +208,9 @@ class GainGaugeWidget(QFrame):
         if event.button() == Qt.LeftButton: self.clicked.emit()
 
 class SerialReader(QThread):
-    data_received = pyqtSignal(np.ndarray, float, float, float)
+    # 使用 Signal 傳遞數據，避免跨線程直接操作 GUI
+    packet_received = pyqtSignal(object) 
+    
     def __init__(self, port, baud_rate):
         super().__init__()
         self.port, self.baud_rate = port, baud_rate
@@ -196,16 +221,18 @@ class SerialReader(QThread):
     def run(self):
         try:
             with serial.Serial(self.port, self.baud_rate, timeout=0.1, write_timeout=1) as ser:
+                print(f"[Serial] Connected to {self.port} at {self.baud_rate}")
                 while self.running:
                     try:
                         while not self.send_queue.empty(): cmd = self.send_queue.get_nowait(); ser.write(cmd)
                     except: pass
                     result = read_packet(ser)
-                    if result: self.data_received.emit(*result)
+                    if result: self.packet_received.emit(result)
+                    else: time.sleep(0.001) 
         except Exception as e: print(f"Serial Error: {e}")
 
 class UDPReader(QThread):
-    data_received = pyqtSignal(np.ndarray, float, float, float)
+    packet_received = pyqtSignal(object)
     def __init__(self, port): super().__init__(); self.port, self.running = port, True
     def stop(self): self.running = False; self.wait()
     def run(self):
@@ -218,7 +245,7 @@ class UDPReader(QThread):
                 except: continue
         finally: sock.close()
 
-# --- 設定對話框 ---
+# --- SettingsDialog ---
 class SettingsDialog(QDialog):
     def __init__(self, parent):
         super().__init__(parent)
@@ -270,11 +297,9 @@ class SettingsDialog(QDialog):
         disp_group = QGroupBox("DISPLAY"); disp_layout = QFormLayout(disp_group); disp_layout.setContentsMargins(8, 8, 8, 8); disp_layout.setVerticalSpacing(6)
         self.speed_dropdown = QComboBox(); self.speed_dropdown.addItems([f"{AIR_SPEED} m/s (Air)", f"{WATER_SPEED} m/s (Water)"]); self.speed_dropdown.setCurrentIndex(1 if self.main_app.current_speed == WATER_SPEED else 0)
         
-        # [新增] Sampling Speed 下拉選單
         self.delay_combo = QComboBox()
         for label, val in SPEED_OPTIONS:
             self.delay_combo.addItem(label, val)
-        # 找目前的 Delay 對應哪個選項
         curr_delay = self.main_app.current_sample_delay
         for i in range(self.delay_combo.count()):
             if abs(self.delay_combo.itemData(i) - curr_delay) < 0.1:
@@ -287,7 +312,7 @@ class SettingsDialog(QDialog):
         self.line_mode_combo = QComboBox(); self.line_mode_combo.addItems(["Follow Auto", "Follow Override"]); self.line_mode_combo.setCurrentIndex(0 if self.main_app.depth_line_mode == "Auto" else 1)
         
         disp_layout.addRow("Env:", self.speed_dropdown)
-        disp_layout.addRow("Speed:", self.delay_combo) # Add to UI
+        disp_layout.addRow("Speed:", self.delay_combo)
         disp_layout.addRow(self.large_depth_checkbox); disp_layout.addRow("Src:", self.overlay_mode_combo); disp_layout.addRow(self.show_line_checkbox); disp_layout.addRow("Line:", self.line_mode_combo)
         scroll_layout.addWidget(disp_group)
 
@@ -358,7 +383,6 @@ class SettingsDialog(QDialog):
         if new_samples != self.main_app.current_max_samples:
             self.main_app.change_resolution(new_samples)
             
-        # [新增] 處理 Sample Delay (Speed) 變更
         new_delay = self.delay_combo.currentData()
         if abs(new_delay - self.main_app.current_sample_delay) > 0.1:
             self.main_app.set_sample_delay(new_delay)
@@ -388,7 +412,7 @@ class WaterfallApp(QMainWindow):
         self.nmea_output_enabled = False; self.nmea_port = 10110
         self.large_depth_visible = True; self.depth_overlay_mode = "Auto"
         self.show_depth_line = True; self.depth_line_mode = "Auto"
-        self.current_gradient = 'cyclic'; 
+        self.current_gradient = 'thermal'; 
         
         self.current_speed = SPEED_OF_SOUND 
         self.current_max_samples = 2000 
@@ -396,11 +420,13 @@ class WaterfallApp(QMainWindow):
         self.lna_gain = 4 
         self.saved_echo_thr = 16 
         self.min_zoom_samples = 20 
-        
-        # [新增] 內部變數儲存 Delay
         self.current_sample_delay = CURRENT_SAMPLE_DELAY_US
         
         self.tvg_curve = np.linspace(1.0, TVG_STRENGTH, self.current_max_samples)
+        
+        # 緩衝區
+        self.latest_frame_data = None
+        self.latest_frame_meta = None
 
         self.setWindowTitle("Open Echo Interface"); self.resize(900, 550)
         self.setStyleSheet(f"""
@@ -435,6 +461,7 @@ class WaterfallApp(QMainWindow):
         self.depth_overlay = pg.TextItem(anchor=(0, 1)); font = QFont("Malgun Gothic", 12); font.setWeight(QFont.DemiBold); self.depth_overlay.setFont(font); self.depth_overlay.setZValue(200); self.waterfall.addItem(self.depth_overlay)
         self.depth_line = pg.PlotCurveItem(pen=pg.mkPen(color='k', width=6)); self.depth_line.setZValue(50); self.waterfall.addItem(self.depth_line)
         
+        # [修復] 此行之前被誤刪，導致崩潰
         self.set_sound_speed(self.current_speed) 
         
         left_layout.addWidget(self.waterfall)
@@ -446,7 +473,9 @@ class WaterfallApp(QMainWindow):
         left_layout.addWidget(footer_frame); main_layout.addWidget(left_container, stretch=1)
 
         self.colorbar = pg.HistogramLUTWidget(); self.colorbar.setImageItem(self.imageitem); 
-        self.colorbar.item.gradient.loadPreset(self.current_gradient)
+        try: self.colorbar.item.gradient.loadPreset(self.current_gradient)
+        except: pass
+            
         sidebar = QFrame(); sidebar.setObjectName("sidebarFrame"); sidebar.setFixedWidth(110)
         side_layout = QVBoxLayout(sidebar); side_layout.setContentsMargins(0, 0, 0, 0); side_layout.setSpacing(0)
 
@@ -463,15 +492,18 @@ class WaterfallApp(QMainWindow):
         self.btn_connect = QPushButton("Connect"); self.btn_connect.setProperty("class", "sidebar_btn"); self.btn_connect.setFixedHeight(60); self.btn_connect.clicked.connect(self.handle_main_connect); side_layout.addWidget(self.btn_connect)
         main_layout.addWidget(sidebar)
 
+        # [優化] 設定 FPS 定時器
+        self.update_timer = QTimer()
+        self.update_timer.setInterval(1000 // FPS_LIMIT) 
+        self.update_timer.timeout.connect(self.update_plot_from_buffer)
+        self.update_timer.start()
+
     def change_resolution(self, new_samples):
         print(f"[System] Changing resolution to {new_samples} samples")
         self.current_max_samples = new_samples
-        
         self.data = np.zeros((MAX_ROWS, self.current_max_samples))
-        
         self.depth_history = np.full(MAX_ROWS, np.nan)
         self.depth_line.setData(x=np.arange(MAX_ROWS), y=self.depth_history, connect="finite")
-        
         self.tvg_curve = np.linspace(1.0, TVG_STRENGTH, self.current_max_samples)
         
         if self.serial_thread and self.serial_thread.isRunning():
@@ -481,24 +513,37 @@ class WaterfallApp(QMainWindow):
         self.current_zoom_samples = self.current_max_samples
         self.update_zoom_range()
 
-    # [新增] 設定 Sample Delay
+    # [修復] 此函式已歸位
+    def set_sound_speed(self, speed):
+        global SPEED_OF_SOUND, SAMPLE_RESOLUTION
+        SPEED_OF_SOUND = self.current_speed = speed
+        SAMPLE_RESOLUTION = (SPEED_OF_SOUND * SAMPLE_TIME * 100) / 2
+        
+        ax = self.waterfall.getAxis("right"); ax.setTickFont(QFont("Arial", 10))
+        
+        raw_options = RANGE_OPTIONS_AIR if speed == AIR_SPEED else RANGE_OPTIONS_WATER
+        max_phys_depth = (self.current_max_samples * SAMPLE_RESOLUTION) / 100.0
+        
+        valid_options = [opt for opt in raw_options if (opt * 4.0) <= max_phys_depth]
+        if valid_options:
+            init_interval = valid_options[0] 
+        else:
+            init_interval = raw_options[-1] 
+            
+        self.current_zoom_samples = (init_interval * 4.0 * 100.0) / SAMPLE_RESOLUTION
+        self.update_zoom_range()
+
     def set_sample_delay(self, delay_us):
         global SAMPLE_TIME, SAMPLE_RESOLUTION
-        
         print(f"[System] Changing sample delay to {delay_us} us")
         self.current_sample_delay = delay_us
-        
-        # 1. 更新全域變數
-        SAMPLE_TIME = delay_us * 1e-6
+        SAMPLE_TIME = (delay_us + 3.4) * 1e-6
         SAMPLE_RESOLUTION = (self.current_speed * SAMPLE_TIME * 100) / 2
         
-        # 2. 發送指令給 Arduino ('D' + val)
         if self.serial_thread and self.serial_thread.isRunning():
             val = int(delay_us)
-            cmd = struct.pack('BBB', ord('D'), val, 0) # 0 is dummy
+            cmd = struct.pack('BBB', ord('D'), val, 0)
             self.serial_thread.send_raw_command(cmd)
-            
-        # 3. 畫面更新
         self.update_zoom_range()
 
     def show_color_menu(self):
@@ -544,10 +589,7 @@ class WaterfallApp(QMainWindow):
         min_range_step = 0.1 
         min_total_depth = min_range_step * 4.0
         min_allowed_samples = (min_total_depth * 100.0) / SAMPLE_RESOLUTION
-        
-        if self.current_zoom_samples <= min_allowed_samples + 1.0: 
-            return
-
+        if self.current_zoom_samples <= min_allowed_samples + 1.0: return
         step = 200
         self.current_zoom_samples = max(min_allowed_samples, self.current_zoom_samples - step)
         self.update_zoom_range()
@@ -564,12 +606,10 @@ class WaterfallApp(QMainWindow):
         
         total_depth_m = (self.current_zoom_samples * SAMPLE_RESOLUTION) / 100.0
         step_m = total_depth_m / 4.0
-        
         tick_depths = [i * step_m for i in range(5)]
         
         ticks = []
         fmt = "{:.1f}" if step_m < 1 else "{:.1f}" 
-        
         for d in tick_depths:
             idx = (d * 100.0) / SAMPLE_RESOLUTION
             ticks.append((idx, fmt.format(d)))
@@ -583,7 +623,18 @@ class WaterfallApp(QMainWindow):
                 line = pg.InfiniteLine(pos=idx, angle=0, pen=pg.mkPen(color=(150,150,150,150), style=Qt.DashLine))
                 self.waterfall.addItem(line)
 
-    def waterfall_plot_callback(self, raw_data, depth_index, drive_frequency, override_idx):
+    # [優化] Serial Thread 回調
+    def on_packet_received(self, packet):
+        self.latest_frame_data = packet[0] # raw data
+        self.latest_frame_meta = packet[1:] # meta
+
+    # [優化] Timer 回調
+    def update_plot_from_buffer(self):
+        if self.latest_frame_data is None: return
+        
+        raw_data = self.latest_frame_data
+        depth_index, drive_frequency, override_idx = self.latest_frame_meta
+        
         if len(raw_data) != self.current_max_samples:
             if abs(len(raw_data) - self.current_max_samples) > 0:
                  self.current_max_samples = len(raw_data)
@@ -592,10 +643,14 @@ class WaterfallApp(QMainWindow):
                  self.depth_history = np.full(MAX_ROWS, np.nan)
                  self.depth_line.setData(x=np.arange(MAX_ROWS), y=self.depth_history, connect="finite")
 
-        filtered = sonar_display_pipeline(raw_data, self.tvg_curve)
+        # [優化] 向量化 DSP
+        filtered = sonar_display_pipeline_optimized(raw_data, self.tvg_curve)
+        
         self.data = np.roll(self.data, -1, axis=0); self.data[-1, :] = filtered
         self.imageitem.setImage(self.data.T, autoLevels=False); self.imageitem.setLevels((10, 220))
-        depth_m, ovr_m = (depth_index * SAMPLE_RESOLUTION) / 100.0, (override_idx * SAMPLE_RESOLUTION) / 100.0
+        
+        depth_m = (depth_index * SAMPLE_RESOLUTION) / 100.0
+        ovr_m = (override_idx * SAMPLE_RESOLUTION) / 100.0
         
         not_blind = (depth_index > PYTHON_IGNORE_INDEX)
         diff = abs(int(depth_index) - int(override_idx))
@@ -617,26 +672,7 @@ class WaterfallApp(QMainWindow):
             self.depth_overlay.setHtml(html_str)
 
         self.lbl_footer_depth.setText(f"Depth: {depth_m * 100:.0f} cm"); self.lbl_footer_ovr.setText(f"Override: {ovr_m * 100:.0f} cm")
-
-    def set_sound_speed(self, speed):
-        global SPEED_OF_SOUND, SAMPLE_RESOLUTION
-        SPEED_OF_SOUND = self.current_speed = speed
-        # [修改] 重新計算解析度 (因為 speed 或 delay 改變)
-        SAMPLE_RESOLUTION = (SPEED_OF_SOUND * SAMPLE_TIME * 100) / 2
-        
-        ax = self.waterfall.getAxis("right"); ax.setTickFont(QFont("Arial", 10))
-        
-        raw_options = RANGE_OPTIONS_AIR if speed == AIR_SPEED else RANGE_OPTIONS_WATER
-        max_phys_depth = (self.current_max_samples * SAMPLE_RESOLUTION) / 100.0
-        
-        valid_options = [opt for opt in raw_options if (opt * 4.0) <= max_phys_depth]
-        if valid_options:
-            init_interval = valid_options[0] 
-        else:
-            init_interval = raw_options[-1] 
-            
-        self.current_zoom_samples = (init_interval * 4.0 * 100.0) / SAMPLE_RESOLUTION
-        self.update_zoom_range()
+        self.latest_frame_data = None
 
     def handle_main_connect(self):
         if self.is_connected:
@@ -647,28 +683,25 @@ class WaterfallApp(QMainWindow):
         else:
             if self.connection_source == "Serial Port":
                 if not self.serial_port_name or self.serial_port_name == "No Ports": return print("No Serial Port Selected")
-                self.serial_thread = SerialReader(self.serial_port_name, BAUD_RATE); self.serial_thread.data_received.connect(self.waterfall_plot_callback); self.serial_thread.start()
+                self.serial_thread = SerialReader(self.serial_port_name, BAUD_RATE)
+                self.serial_thread.packet_received.connect(self.on_packet_received)
+                self.serial_thread.start()
                 
                 QThread.msleep(2000) 
                 
-                # 同步所有設定
-                # 1. Samples
                 cmd = struct.pack('>B H', ord('N'), self.current_max_samples)
                 self.serial_thread.send_raw_command(cmd)
                 QThread.msleep(50)
                 
-                # 2. Delay (Speed)
                 val = int(self.current_sample_delay)
                 cmd = struct.pack('BBB', ord('D'), val, 0)
                 self.serial_thread.send_raw_command(cmd)
                 QThread.msleep(50)
                 
-                # 3. LNA
                 reg_map = {1: 0x05, 2: 0x07, 3: 0x04, 4: 0x06}
                 val = reg_map.get(self.lna_gain, 0x06)
                 self.serial_thread.send_raw_command(struct.pack('BBB', ord('W'), 0x13, val))
                 
-                # 4. Threshold
                 data = (self.saved_echo_thr - 1) | 0x10; addr = 0x17
                 self.serial_thread.send_raw_command(struct.pack('BBB', ord('W'), addr, data))
                 
@@ -681,8 +714,13 @@ class WaterfallApp(QMainWindow):
     def set_gradient(self, n): self.current_gradient = n; self.colorbar.item.gradient.loadPreset(n)
     def configure_nmea_output(self, e, p): self.nmea_output_enabled, self.nmea_port = e, p
     def closeEvent(self, e):
-        if self.serial_thread: self.serial_thread.stop()
-        if self.udp_thread: self.udp_thread.stop()
+        # [安全清理]
+        if self.serial_thread:
+            self.serial_thread.stop()
+            self.serial_thread.wait() # Wait for thread to finish
+        if self.udp_thread: 
+            self.udp_thread.stop()
+            self.udp_thread.wait()
         e.accept()
 
 if __name__ == "__main__":
