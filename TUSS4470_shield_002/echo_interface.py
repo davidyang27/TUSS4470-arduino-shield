@@ -25,6 +25,10 @@ except ImportError as e:
 # ============================================================
 # --- 全域配置參數 ---
 # ============================================================
+
+# [關鍵設定] 介面縮放比例
+UI_SCALE_FACTOR = 1.5 
+
 AIR_SPEED = 343.0      
 WATER_SPEED = 1500.0   
 DEFAULT_ENVIRONMENT = 'AIR' 
@@ -49,21 +53,39 @@ DESPECKLE_THRESHOLD = 10
 SMOOTH_ALPHA = 0.25
 TVG_STRENGTH = 1.2
 
-# [渲染優化參數]
+# 渲染優化參數
 MAX_DISPLAY_SAMPLES = 2000 
 FPS_LIMIT = 30             
 
-SIDEBAR_BTN_FONT_SIZE = 15
 COLOR_MAPS = ["thermal", "flame", "yellowy", "bipolar", "spectrum", "cyclic", "greyclip", "grey", "viridis", "plasma", "inferno", "magma"]
 
+# Range 選項 (Step)
 RANGE_OPTIONS_AIR = [10.0, 5.0, 4.0, 3.0, 2.0, 1.0, 0.5, 0.1]
 RANGE_OPTIONS_WATER = [40.0, 20.0, 10.0, 5.0, 4.0, 3.0, 2.0, 1.0]
+
+# [關鍵修改] 最小總可視深度 (單位：公尺)
+# 總深度 = 視窗顯示的最上到最下的距離
+MIN_VIEW_METERS_AIR = 0.5   # 空氣：允許縮到總深 0.5m
+MIN_VIEW_METERS_WATER = 1.8 # 水中：限制在總深 1.8m (您要求的極限)
 
 SPEED_OPTIONS = [
     ("Standard (11.5us)", 11.5), 
     ("Long Range (25us)", 25.0), 
     ("Ultra Range (50us)", 50.0) 
 ]
+
+# --- [自動計算] 根據縮放比例計算 UI 尺寸 ---
+SIDEBAR_BTN_HEIGHT = int(60 * UI_SCALE_FACTOR)
+SIDEBAR_FONT_SIZE = int(15 * UI_SCALE_FACTOR)
+ZOOM_FONT_SIZE = int(28 * UI_SCALE_FACTOR) 
+
+GAUGE_SIZE = int(40 * UI_SCALE_FACTOR)
+GAUGE_FONT_SIZE = int(13 * UI_SCALE_FACTOR)
+SETTINGS_FONT_SIZE = int(12 * UI_SCALE_FACTOR)
+OVERLAY_FONT_L = int(64 * UI_SCALE_FACTOR)
+OVERLAY_FONT_M = int(32 * UI_SCALE_FACTOR)
+OVERLAY_FONT_S = int(12 * UI_SCALE_FACTOR)
+AXIS_FONT_SIZE = int(10 * UI_SCALE_FACTOR)
 
 # --- 輔助函式 ---
 def read_packet(ser):
@@ -72,14 +94,13 @@ def read_packet(ser):
     header_bytes = ser.read(9)
     if len(header_bytes) != 9: return None
     if header_bytes[0] != 0xAA: 
-        ser.read(ser.in_waiting) # Sync Error
+        ser.read(ser.in_waiting) 
         return None 
     
     try:
         start, depth, freq_scaled, vDrv_scaled, num_samples = struct.unpack("<BHhHH", header_bytes)
     except: return None
 
-    # 安全保護
     if num_samples > 20000 or num_samples < 10:
         ser.read(ser.in_waiting)
         return None
@@ -103,24 +124,19 @@ def get_serial_ports():
     ports = [port.device for port in serial.tools.list_ports.comports()]
     return ports if ports else ["No Ports"]
 
-# [優化] 使用 Numpy 向量化取代 Python 迴圈
 def sonar_display_pipeline_optimized(raw_line, tvg_curve):
-    # 1. Gain & Clip
     line = raw_line.astype(np.float32) * DISPLAY_GAIN
     np.clip(line, 0, 255, out=line)
     
-    # 2. Despeckle (使用卷積運算)
     if len(line) > DESPECKLE_WINDOW:
         kernel = np.ones(DESPECKLE_WINDOW) / DESPECKLE_WINDOW
         local_mean = np.convolve(line, kernel, mode='same')
         mask = (line > (local_mean + DESPECKLE_THRESHOLD)) & (local_mean < DESPECKLE_THRESHOLD)
         line[mask] = 0
     
-    # 3. Smoothing (簡單平滑)
     for i in range(1, len(line)):
         line[i] = SMOOTH_ALPHA * line[i] + (1 - SMOOTH_ALPHA) * line[i - 1]
 
-    # 4. TVG
     if len(tvg_curve) == len(line):
         line *= tvg_curve
         
@@ -132,7 +148,8 @@ class BasePopup(QWidget):
         super().__init__(parent)
         self.setWindowFlags(Qt.Popup | Qt.FramelessWindowHint)
         self.setAttribute(Qt.WA_DeleteOnClose)
-        self.font_size = SIDEBAR_BTN_FONT_SIZE - 3
+        self.font_size = SIDEBAR_FONT_SIZE - int(3 * UI_SCALE_FACTOR)
+        
         self.setStyleSheet(f"""
             QWidget {{ background-color: #2b2b2b; border: 1px solid #3e4145; }}
             QPushButton {{ background-color: transparent; color: #e0e0e0; font-family: 'Malgun Gothic'; font-size: {self.font_size}px; font-weight: bold; text-align: center; padding: 8px 5px; border: none; border-bottom: 1px solid #333; }}
@@ -144,7 +161,10 @@ class ColorPopup(BasePopup):
     itemSelected = pyqtSignal(str)
     def __init__(self, current, parent=None):
         super().__init__(parent)
-        layout = QVBoxLayout(self); layout.setContentsMargins(0, 0, 0, 0); layout.setSpacing(0)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        
         for name in COLOR_MAPS:
             try:
                 pg.graphicsItems.GradientEditorItem.Gradients[name]
@@ -153,7 +173,9 @@ class ColorPopup(BasePopup):
                 btn.clicked.connect(lambda checked, n=name: self.handle_click(n))
                 layout.addWidget(btn)
             except: continue
-        self.setFixedWidth(110)
+            
+        self.setFixedWidth(int(140 * UI_SCALE_FACTOR)) 
+
     def handle_click(self, name): self.itemSelected.emit(name); self.close()
 
 class RangePopup(BasePopup):
@@ -172,31 +194,39 @@ class RangePopup(BasePopup):
             if abs(val - current_step_approx) < (val * 0.1): btn.setProperty("active", True)
             btn.clicked.connect(lambda checked, v=val: self.handle_click(v))
             layout.addWidget(btn)
-        self.setFixedWidth(110)
+        self.setFixedWidth(int(110 * UI_SCALE_FACTOR))
     def handle_click(self, val): self.itemSelected.emit(val); self.close()
 
 class CircularGauge(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setFixedSize(40, 40); self.value = 1; self.max_value = 4
+        self.setFixedSize(GAUGE_SIZE, GAUGE_SIZE); self.value = 1; self.max_value = 4
         self.bg_color = QColor("#333333"); self.progress_color = QColor("#00ff00") 
         self.setAttribute(Qt.WA_TranslucentBackground)
     def set_value(self, val): self.value = val; self.update()
     def paintEvent(self, event):
         painter = QPainter(self); painter.setRenderHint(QPainter.Antialiasing)
-        w, h = self.width(), self.height(); padding = 4; rect = QRectF(padding, padding, w - 2*padding, h - 2*padding)
-        painter.setPen(QPen(self.bg_color, 3, Qt.SolidLine, Qt.RoundCap)); painter.drawArc(rect, 225 * 16, -270 * 16)
+        w, h = self.width(), self.height(); padding = int(4 * UI_SCALE_FACTOR); 
+        rect = QRectF(padding, padding, w - 2*padding, h - 2*padding)
+        
+        pen_width = int(3 * UI_SCALE_FACTOR)
+        painter.setPen(QPen(self.bg_color, pen_width, Qt.SolidLine, Qt.RoundCap)); painter.drawArc(rect, 225 * 16, -270 * 16)
         if self.max_value > 0:
             ratio = self.value / self.max_value; span = -270 * ratio * 16
-            painter.setPen(QPen(self.progress_color, 3, Qt.SolidLine, Qt.RoundCap)); painter.drawArc(rect, 225 * 16, int(span))
-        painter.setPen(Qt.white); font = QFont("Malgun Gothic", 13, QFont.Bold); painter.setFont(font)
+            painter.setPen(QPen(self.progress_color, pen_width, Qt.SolidLine, Qt.RoundCap)); painter.drawArc(rect, 225 * 16, int(span))
+        
+        painter.setPen(Qt.white); 
+        font = QFont("Malgun Gothic", GAUGE_FONT_SIZE, QFont.Bold); 
+        painter.setFont(font)
         painter.drawText(rect, Qt.AlignCenter, str(self.value))
 
 class GainGaugeWidget(QFrame):
     clicked = pyqtSignal()
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setObjectName("gainGaugeWidget"); self.setFixedHeight(60); self.setCursor(Qt.PointingHandCursor)
+        self.setObjectName("gainGaugeWidget"); 
+        self.setFixedHeight(SIDEBAR_BTN_HEIGHT); 
+        self.setCursor(Qt.PointingHandCursor)
         layout = QHBoxLayout(self); layout.setContentsMargins(5, 5, 5, 5); layout.setSpacing(5)
         self.gauge = CircularGauge(); label_layout = QVBoxLayout(); label_layout.setSpacing(0); label_layout.addStretch()
         self.lbl_main = QLabel("LNA"); self.lbl_main.setObjectName("gainLabel")
@@ -208,9 +238,7 @@ class GainGaugeWidget(QFrame):
         if event.button() == Qt.LeftButton: self.clicked.emit()
 
 class SerialReader(QThread):
-    # 使用 Signal 傳遞數據，避免跨線程直接操作 GUI
     packet_received = pyqtSignal(object) 
-    
     def __init__(self, port, baud_rate):
         super().__init__()
         self.port, self.baud_rate = port, baud_rate
@@ -250,31 +278,34 @@ class SettingsDialog(QDialog):
     def __init__(self, parent):
         super().__init__(parent)
         self.main_app = parent
-        self.setWindowTitle("Config"); self.resize(320, 580)
+        self.setWindowTitle("Config"); 
+        self.resize(int(320 * UI_SCALE_FACTOR), int(580 * UI_SCALE_FACTOR))
         self.echo_thr_val = self.main_app.saved_echo_thr
         
-        self.setStyleSheet("""
-            QDialog { background-color: #2b2b2b; color: #e0e0e0; font-family: 'Malgun Gothic', Arial; }
-            QLabel { color: #e0e0e0; font-weight: bold; font-size: 11px; }
-            QComboBox, QLineEdit { background-color: #3a3a3a; border: 1px solid #555; color: white; padding: 3px; border-radius: 2px; font-size: 11px; min-height: 18px; }
-            QComboBox::drop-down { subcontrol-origin: padding; subcontrol-position: top right; width: 20px; border-left: 1px solid #555; background-color: #444; }
-            QComboBox::down-arrow { width: 0px; height: 0px; border-left: 4px solid transparent; border-right: 4px solid transparent; border-top: 5px solid #ffffff; margin-top: 1px; margin-right: 1px; }
-            QPushButton { background-color: #444; border: 1px solid #666; color: white; padding: 6px; border-radius: 3px; font-weight: bold; font-size: 12px; }
-            QPushButton:hover { background-color: #555; border-color: #777; }
-            QPushButton#applyBtn { background-color: #0078d7; border-color: #005a9e; }
-            QPushButton#applyBtn:hover { background-color: #006cbd; }
-            QGroupBox { border: 1px solid #555; border-radius: 4px; margin-top: 10px; padding-top: 5px; font-weight: bold; font-size: 12px; }
-            QGroupBox::title { subcontrol-origin: margin; subcontrol-position: top left; left: 7px; padding: 0 2px; background-color: #2b2b2b; color: #00b4ff; }
-            QScrollArea { border: none; background-color: transparent; }
-            QWidget#scrollContent { background-color: transparent; }
+        lbl_size = int(11 * UI_SCALE_FACTOR)
+        
+        self.setStyleSheet(f"""
+            QDialog {{ background-color: #2b2b2b; color: #e0e0e0; font-family: 'Malgun Gothic', Arial; }}
+            QLabel {{ color: #e0e0e0; font-weight: bold; font-size: {lbl_size}px; }}
+            QComboBox, QLineEdit {{ background-color: #3a3a3a; border: 1px solid #555; color: white; padding: 3px; border-radius: 2px; font-size: {lbl_size}px; min-height: {int(18 * UI_SCALE_FACTOR)}px; }}
+            QComboBox::drop-down {{ subcontrol-origin: padding; subcontrol-position: top right; width: {int(20 * UI_SCALE_FACTOR)}px; border-left: 1px solid #555; background-color: #444; }}
+            QComboBox::down-arrow {{ width: 0px; height: 0px; border-left: 4px solid transparent; border-right: 4px solid transparent; border-top: 5px solid #ffffff; margin-top: 1px; margin-right: 1px; }}
+            QPushButton {{ background-color: #444; border: 1px solid #666; color: white; padding: 6px; border-radius: 3px; font-weight: bold; font-size: {SETTINGS_FONT_SIZE}px; }}
+            QPushButton:hover {{ background-color: #555; border-color: #777; }}
+            QPushButton#applyBtn {{ background-color: #0078d7; border-color: #005a9e; }}
+            QPushButton#applyBtn:hover {{ background-color: #006cbd; }}
+            QGroupBox {{ border: 1px solid #555; border-radius: 4px; margin-top: 10px; padding-top: 5px; font-weight: bold; font-size: {SETTINGS_FONT_SIZE}px; }}
+            QGroupBox::title {{ subcontrol-origin: margin; subcontrol-position: top left; left: 7px; padding: 0 2px; background-color: #2b2b2b; color: #00b4ff; }}
+            QScrollArea {{ border: none; background-color: transparent; }}
+            QWidget#scrollContent {{ background-color: transparent; }}
         """)
 
         main_layout = QVBoxLayout(self); main_layout.setContentsMargins(2, 2, 2, 2); main_layout.setSpacing(2)
         scroll = QScrollArea(); scroll.setWidgetResizable(True); scroll_content = QWidget(); scroll_content.setObjectName("scrollContent")
-        scroll_layout = QVBoxLayout(scroll_content); scroll_layout.setSpacing(8); scroll_layout.setContentsMargins(5, 5, 5, 5)
+        scroll_layout = QVBoxLayout(scroll_content); scroll_layout.setSpacing(int(8 * UI_SCALE_FACTOR)); scroll_layout.setContentsMargins(5, 5, 5, 5)
 
         # 1. Connection
-        conn_group = QGroupBox("CONNECTION"); conn_layout = QFormLayout(conn_group); conn_layout.setContentsMargins(8, 8, 8, 8); conn_layout.setVerticalSpacing(6)
+        conn_group = QGroupBox("CONNECTION"); conn_layout = QFormLayout(conn_group); conn_layout.setContentsMargins(8, 8, 8, 8); conn_layout.setVerticalSpacing(int(6 * UI_SCALE_FACTOR))
         self.source_combo = QComboBox(); self.source_combo.addItems(["Serial Port", "UDP Stream"]); self.source_combo.setCurrentText(self.main_app.connection_source)
         self.serial_combo = QComboBox(); self.serial_combo.addItems(get_serial_ports()); self.serial_combo.setCurrentText(self.main_app.serial_port_name)
         self.udp_port_input = QLineEdit(str(self.main_app.udp_port_num))
@@ -294,7 +325,7 @@ class SettingsDialog(QDialog):
         scroll_layout.addWidget(conn_group)
 
         # 2. Display
-        disp_group = QGroupBox("DISPLAY"); disp_layout = QFormLayout(disp_group); disp_layout.setContentsMargins(8, 8, 8, 8); disp_layout.setVerticalSpacing(6)
+        disp_group = QGroupBox("DISPLAY"); disp_layout = QFormLayout(disp_group); disp_layout.setContentsMargins(8, 8, 8, 8); disp_layout.setVerticalSpacing(int(6 * UI_SCALE_FACTOR))
         self.speed_dropdown = QComboBox(); self.speed_dropdown.addItems([f"{AIR_SPEED} m/s (Air)", f"{WATER_SPEED} m/s (Water)"]); self.speed_dropdown.setCurrentIndex(1 if self.main_app.current_speed == WATER_SPEED else 0)
         
         self.delay_combo = QComboBox()
@@ -317,7 +348,7 @@ class SettingsDialog(QDialog):
         scroll_layout.addWidget(disp_group)
 
         # 3. NMEA
-        nmea_group = QGroupBox("NMEA TCP"); nmea_layout = QFormLayout(nmea_group); nmea_layout.setContentsMargins(8, 8, 8, 8); nmea_layout.setVerticalSpacing(6)
+        nmea_group = QGroupBox("NMEA TCP"); nmea_layout = QFormLayout(nmea_group); nmea_layout.setContentsMargins(8, 8, 8, 8); nmea_layout.setVerticalSpacing(int(6 * UI_SCALE_FACTOR))
         self.nmea_checkbox = QCheckBox("Enable"); self.nmea_checkbox.setChecked(self.main_app.nmea_output_enabled)
         self.nmea_port_input = QLineEdit(str(self.main_app.nmea_port))
         nmea_layout.addRow("On:", self.nmea_checkbox); nmea_layout.addRow("Port:", self.nmea_port_input)
@@ -327,16 +358,16 @@ class SettingsDialog(QDialog):
         reg_group = QGroupBox("REGISTER"); reg_layout = QVBoxLayout(reg_group); reg_layout.setContentsMargins(8, 15, 8, 8); reg_layout.setSpacing(10)
         echo_layout = QHBoxLayout()
         self.lbl_echo_title = QLabel("Echo Thr:")
-        self.btn_echo_minus = QPushButton("-"); self.btn_echo_minus.setFixedSize(25, 20); self.btn_echo_minus.clicked.connect(self.decrease_echo_thr)
-        self.lbl_echo_val = QLabel(str(self.echo_thr_val)); self.lbl_echo_val.setAlignment(Qt.AlignCenter); self.lbl_echo_val.setFixedWidth(25)
-        self.btn_echo_plus = QPushButton("+"); self.btn_echo_plus.setFixedSize(25, 20); self.btn_echo_plus.clicked.connect(self.increase_echo_thr)
-        self.btn_echo_send = QPushButton("Send"); self.btn_echo_send.setCursor(Qt.PointingHandCursor); self.btn_echo_send.setFixedWidth(50); self.btn_echo_send.clicked.connect(self.send_echo_thr_cmd)
+        self.btn_echo_minus = QPushButton("-"); self.btn_echo_minus.setFixedSize(int(25*UI_SCALE_FACTOR), int(20*UI_SCALE_FACTOR)); self.btn_echo_minus.clicked.connect(self.decrease_echo_thr)
+        self.lbl_echo_val = QLabel(str(self.echo_thr_val)); self.lbl_echo_val.setAlignment(Qt.AlignCenter); self.lbl_echo_val.setFixedWidth(int(25*UI_SCALE_FACTOR))
+        self.btn_echo_plus = QPushButton("+"); self.btn_echo_plus.setFixedSize(int(25*UI_SCALE_FACTOR), int(20*UI_SCALE_FACTOR)); self.btn_echo_plus.clicked.connect(self.increase_echo_thr)
+        self.btn_echo_send = QPushButton("Send"); self.btn_echo_send.setCursor(Qt.PointingHandCursor); self.btn_echo_send.setFixedWidth(int(50*UI_SCALE_FACTOR)); self.btn_echo_send.clicked.connect(self.send_echo_thr_cmd)
         echo_layout.addWidget(self.lbl_echo_title); echo_layout.addWidget(self.btn_echo_minus); echo_layout.addWidget(self.lbl_echo_val); echo_layout.addWidget(self.btn_echo_plus); echo_layout.addStretch(); echo_layout.addWidget(self.btn_echo_send)
         
         custom_layout = QHBoxLayout()
         self.lbl_raw_title = QLabel("Raw Reg:") 
         self.reg_input = QLineEdit(); self.reg_input.setPlaceholderText("Addr, Data")
-        self.reg_btn = QPushButton("Send"); self.reg_btn.setCursor(Qt.PointingHandCursor); self.reg_btn.setFixedWidth(50); self.reg_btn.clicked.connect(self.handle_reg_send)
+        self.reg_btn = QPushButton("Send"); self.reg_btn.setCursor(Qt.PointingHandCursor); self.reg_btn.setFixedWidth(int(50*UI_SCALE_FACTOR)); self.reg_btn.clicked.connect(self.handle_reg_send)
         custom_layout.addWidget(self.lbl_raw_title); custom_layout.addWidget(self.reg_input); custom_layout.addWidget(self.reg_btn) 
 
         reg_layout.addLayout(echo_layout); reg_layout.addLayout(custom_layout)
@@ -405,6 +436,7 @@ class SettingsDialog(QDialog):
 class WaterfallApp(QMainWindow):
     def __init__(self):
         super().__init__()
+        print("[Init] Starting WaterfallApp...")
         self.serial_thread = None; self.udp_thread = None
         self.connection_source = "Serial Port"; self.serial_port_name = ""; ports = get_serial_ports()
         if ports: self.serial_port_name = ports[0]
@@ -412,7 +444,7 @@ class WaterfallApp(QMainWindow):
         self.nmea_output_enabled = False; self.nmea_port = 10110
         self.large_depth_visible = True; self.depth_overlay_mode = "Auto"
         self.show_depth_line = True; self.depth_line_mode = "Auto"
-        self.current_gradient = 'thermal'; 
+        self.current_gradient = 'cyclic'; 
         
         self.current_speed = SPEED_OF_SOUND 
         self.current_max_samples = 2000 
@@ -428,20 +460,20 @@ class WaterfallApp(QMainWindow):
         self.latest_frame_data = None
         self.latest_frame_meta = None
 
-        self.setWindowTitle("Open Echo Interface"); self.resize(900, 550)
+        self.setWindowTitle("Open Echo Interface"); self.resize(int(900 * UI_SCALE_FACTOR), int(550 * UI_SCALE_FACTOR))
         self.setStyleSheet(f"""
             * {{ font-family: 'Malgun Gothic', Arial, sans-serif; }}
             QMainWindow {{ background-color: black; }} QWidget {{ background-color: black; color: #e0e0e0; }}
             QFrame#sidebarFrame {{ background-color: #2b2b2b; border-left: 1px solid #1a1a1a; }}
-            QPushButton.sidebar_btn {{ background-color: transparent; border: none; border-bottom: 1px solid #3e4145; color: #ccc; font-size: {SIDEBAR_BTN_FONT_SIZE}px; font-weight: bold; border-radius: 0px; padding: 10px; }}
+            QPushButton.sidebar_btn {{ background-color: transparent; border: none; border-bottom: 1px solid #3e4145; color: #ccc; font-size: {SIDEBAR_FONT_SIZE}px; font-weight: bold; border-radius: 0px; padding: 10px; }}
             QPushButton.sidebar_btn:hover {{ background-color: #3e4145; color: white; }} QPushButton.sidebar_btn:pressed {{ background-color: #1a1a1a; color: #00aaff; }}
-            QPushButton.connect_active {{ background-color: transparent; border: none; border-bottom: 1px solid #3e4145; border-left: 4px solid #ff5555; color: #ff5555; font-size: {SIDEBAR_BTN_FONT_SIZE}px; font-weight: bold; padding: 10px; }}
+            QPushButton.connect_active {{ background-color: transparent; border: none; border-bottom: 1px solid #3e4145; border-left: 4px solid #ff5555; color: #ff5555; font-size: {SIDEBAR_FONT_SIZE}px; font-weight: bold; padding: 10px; }}
             QPushButton.connect_active:hover {{ background-color: #3e4145; }}
             QFrame#gainGaugeWidget {{ background-color: transparent; border-bottom: 1px solid #3e4145; }} QFrame#gainGaugeWidget:hover {{ background-color: #3e4145; }}
-            QLabel#gainLabel {{ background-color: transparent; color: #ccc; font-weight: bold; font-size: {SIDEBAR_BTN_FONT_SIZE}px; }}
-            QLabel#gainSubLabel {{ background-color: transparent; color: #ccc; font-size: {SIDEBAR_BTN_FONT_SIZE - 2}px; margin-top: -2px; }}
+            QLabel#gainLabel {{ background-color: transparent; color: #ccc; font-weight: bold; font-size: {SIDEBAR_FONT_SIZE}px; }}
+            QLabel#gainSubLabel {{ background-color: transparent; color: #ccc; font-size: {SIDEBAR_FONT_SIZE - 2}px; margin-top: -2px; }}
             QFrame#footerFrame {{ background-color: #111; border-top: 1px solid #333; }}
-            QLabel#footerLabel {{ background-color: transparent; color: #aaa; font-size: 10px; margin-right: 15px; }}
+            QLabel#footerLabel {{ background-color: transparent; color: #aaa; font-size: {int(10 * UI_SCALE_FACTOR)}px; margin-right: 15px; }}
         """)
 
         self.data = np.zeros((MAX_ROWS, self.current_max_samples))
@@ -454,14 +486,13 @@ class WaterfallApp(QMainWindow):
         self.waterfall = pg.PlotWidget(background='k'); vb = self.waterfall.getViewBox(); vb.setDefaultPadding(0)
         self.waterfall.setMouseEnabled(x=False, y=False); self.waterfall.showAxis('right'); self.waterfall.hideAxis('left'); self.waterfall.hideAxis('bottom')
         self.waterfall.setMenuEnabled(False); self.waterfall.getPlotItem().hideButtons()
-        y_right = self.waterfall.getAxis('right'); y_right.setWidth(45); y_right.setStyle(showValues=True)
+        y_right = self.waterfall.getAxis('right'); y_right.setWidth(int(45 * UI_SCALE_FACTOR)); y_right.setStyle(showValues=True)
         y_right.setTextPen(pg.mkPen(color='w')); y_right.setPen(pg.mkPen(color=(100,100,100)))
         
         self.imageitem = pg.ImageItem(axisOrder="row-major"); self.waterfall.addItem(self.imageitem); self.waterfall.invertY(True)
         self.depth_overlay = pg.TextItem(anchor=(0, 1)); font = QFont("Malgun Gothic", 12); font.setWeight(QFont.DemiBold); self.depth_overlay.setFont(font); self.depth_overlay.setZValue(200); self.waterfall.addItem(self.depth_overlay)
-        self.depth_line = pg.PlotCurveItem(pen=pg.mkPen(color='k', width=6)); self.depth_line.setZValue(50); self.waterfall.addItem(self.depth_line)
+        self.depth_line = pg.PlotCurveItem(pen=pg.mkPen(color='k', width=int(6*UI_SCALE_FACTOR))); self.depth_line.setZValue(50); self.waterfall.addItem(self.depth_line)
         
-        # [修復] 此行之前被誤刪，導致崩潰
         self.set_sound_speed(self.current_speed) 
         
         left_layout.addWidget(self.waterfall)
@@ -476,20 +507,70 @@ class WaterfallApp(QMainWindow):
         try: self.colorbar.item.gradient.loadPreset(self.current_gradient)
         except: pass
             
-        sidebar = QFrame(); sidebar.setObjectName("sidebarFrame"); sidebar.setFixedWidth(110)
+        sidebar = QFrame(); sidebar.setObjectName("sidebarFrame"); sidebar.setFixedWidth(int(110 * UI_SCALE_FACTOR))
         side_layout = QVBoxLayout(sidebar); side_layout.setContentsMargins(0, 0, 0, 0); side_layout.setSpacing(0)
 
-        self.btn_plus = QPushButton("+"); self.btn_plus.setProperty("class", "sidebar_btn"); self.btn_plus.setFixedHeight(60); self.btn_plus.clicked.connect(self.zoom_in); side_layout.addWidget(self.btn_plus)
-        self.btn_minus = QPushButton("-"); self.btn_minus.setProperty("class", "sidebar_btn"); self.btn_minus.setFixedHeight(60); self.btn_minus.clicked.connect(self.zoom_out); side_layout.addWidget(self.btn_minus)
+        # [修改] 縮放按鈕合併為水平佈局，並確保背景透明
+        zoom_widget = QWidget()
+        zoom_widget.setAttribute(Qt.WA_StyledBackground, True)
+        zoom_widget.setStyleSheet("background-color: transparent;")
+        zoom_layout = QHBoxLayout(zoom_widget)
+        zoom_layout.setContentsMargins(0, 0, 0, 0)
+        zoom_layout.setSpacing(0) 
+
+        self.btn_plus = QPushButton("+")
+        self.btn_plus.setFixedHeight(SIDEBAR_BTN_HEIGHT)
+        # [關鍵] 定義樣式，背景為透明，字體放大
+        self.btn_plus.setStyleSheet(f"""
+            QPushButton {{ 
+                background-color: transparent; 
+                border: none; 
+                border-bottom: 1px solid #3e4145; 
+                border-right: 1px solid #3e4145; 
+                color: #ccc; 
+                font-family: 'Malgun Gothic';
+                font-size: {ZOOM_FONT_SIZE}px; 
+                font-weight: bold; 
+                border-radius: 0px; 
+            }}
+            QPushButton:hover {{ background-color: #3e4145; color: white; }}
+            QPushButton:pressed {{ background-color: #1a1a1a; color: #00aaff; }}
+        """)
+        self.btn_plus.clicked.connect(self.zoom_in)
         
-        self.btn_range = QPushButton("Range"); self.btn_range.setProperty("class", "sidebar_btn"); self.btn_range.setFixedHeight(60); self.btn_range.clicked.connect(self.show_range_menu); side_layout.addWidget(self.btn_range)
-        self.btn_color = QPushButton("Color"); self.btn_color.setProperty("class", "sidebar_btn"); self.btn_color.setFixedHeight(60); self.btn_color.clicked.connect(self.show_color_menu); side_layout.addWidget(self.btn_color)
+        self.btn_minus = QPushButton("-")
+        self.btn_minus.setFixedHeight(SIDEBAR_BTN_HEIGHT)
+        self.btn_minus.setStyleSheet(f"""
+            QPushButton {{ 
+                background-color: transparent; 
+                border: none; 
+                border-bottom: 1px solid #3e4145; 
+                color: #ccc; 
+                font-family: 'Malgun Gothic';
+                font-size: {ZOOM_FONT_SIZE}px; 
+                font-weight: bold; 
+                border-radius: 0px; 
+            }}
+            QPushButton:hover {{ background-color: #3e4145; color: white; }}
+            QPushButton:pressed {{ background-color: #1a1a1a; color: #00aaff; }}
+        """)
+        self.btn_minus.clicked.connect(self.zoom_out)
+
+        zoom_layout.addWidget(self.btn_plus)
+        zoom_layout.addWidget(self.btn_minus)
+        
+        side_layout.addWidget(zoom_widget)
+        
+        self.btn_range = QPushButton("Range"); self.btn_range.setProperty("class", "sidebar_btn"); self.btn_range.setFixedHeight(SIDEBAR_BTN_HEIGHT); self.btn_range.clicked.connect(self.show_range_menu); side_layout.addWidget(self.btn_range)
+        self.btn_color = QPushButton("Color"); self.btn_color.setProperty("class", "sidebar_btn"); self.btn_color.setFixedHeight(SIDEBAR_BTN_HEIGHT); self.btn_color.clicked.connect(self.show_color_menu); side_layout.addWidget(self.btn_color)
         
         self.lna_widget = GainGaugeWidget(); self.lna_widget.set_value(self.lna_gain); self.lna_widget.clicked.connect(self.cycle_lna_gain); side_layout.addWidget(self.lna_widget)
+        
+        # Spacer 會自動填滿省下的空間
         spacer = QWidget(); spacer.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Expanding); spacer.setStyleSheet("background-color: transparent;"); side_layout.addWidget(spacer)
         
-        self.btn_settings = QPushButton("Settings"); self.btn_settings.setProperty("class", "sidebar_btn"); self.btn_settings.setFixedHeight(60); self.btn_settings.clicked.connect(self.open_settings); side_layout.addWidget(self.btn_settings)
-        self.btn_connect = QPushButton("Connect"); self.btn_connect.setProperty("class", "sidebar_btn"); self.btn_connect.setFixedHeight(60); self.btn_connect.clicked.connect(self.handle_main_connect); side_layout.addWidget(self.btn_connect)
+        self.btn_settings = QPushButton("Settings"); self.btn_settings.setProperty("class", "sidebar_btn"); self.btn_settings.setFixedHeight(SIDEBAR_BTN_HEIGHT); self.btn_settings.clicked.connect(self.open_settings); side_layout.addWidget(self.btn_settings)
+        self.btn_connect = QPushButton("Connect"); self.btn_connect.setProperty("class", "sidebar_btn"); self.btn_connect.setFixedHeight(SIDEBAR_BTN_HEIGHT); self.btn_connect.clicked.connect(self.handle_main_connect); side_layout.addWidget(self.btn_connect)
         main_layout.addWidget(sidebar)
 
         # [優化] 設定 FPS 定時器
@@ -513,26 +594,6 @@ class WaterfallApp(QMainWindow):
         self.current_zoom_samples = self.current_max_samples
         self.update_zoom_range()
 
-    # [修復] 此函式已歸位
-    def set_sound_speed(self, speed):
-        global SPEED_OF_SOUND, SAMPLE_RESOLUTION
-        SPEED_OF_SOUND = self.current_speed = speed
-        SAMPLE_RESOLUTION = (SPEED_OF_SOUND * SAMPLE_TIME * 100) / 2
-        
-        ax = self.waterfall.getAxis("right"); ax.setTickFont(QFont("Arial", 10))
-        
-        raw_options = RANGE_OPTIONS_AIR if speed == AIR_SPEED else RANGE_OPTIONS_WATER
-        max_phys_depth = (self.current_max_samples * SAMPLE_RESOLUTION) / 100.0
-        
-        valid_options = [opt for opt in raw_options if (opt * 4.0) <= max_phys_depth]
-        if valid_options:
-            init_interval = valid_options[0] 
-        else:
-            init_interval = raw_options[-1] 
-            
-        self.current_zoom_samples = (init_interval * 4.0 * 100.0) / SAMPLE_RESOLUTION
-        self.update_zoom_range()
-
     def set_sample_delay(self, delay_us):
         global SAMPLE_TIME, SAMPLE_RESOLUTION
         print(f"[System] Changing sample delay to {delay_us} us")
@@ -546,20 +607,43 @@ class WaterfallApp(QMainWindow):
             self.serial_thread.send_raw_command(cmd)
         self.update_zoom_range()
 
+    # [修改] 使用 Center 邏輯
     def show_color_menu(self):
-        btn_pos = self.btn_color.mapToGlobal(QPoint(0, 0)); popup = ColorPopup(self.current_gradient, self); popup.itemSelected.connect(self.set_gradient)
-        self.position_popup(popup, btn_pos)
+        # 建立彈窗
+        popup = ColorPopup(self.current_gradient, self)
+        popup.itemSelected.connect(self.set_gradient)
+        
+        popup.adjustSize()
+        
+        # 取得視窗與彈窗尺寸
+        window_geo = self.geometry()
+        popup_width = popup.width()
+        popup_height = popup.height()
+        
+        # [關鍵] 計算絕對中央位置
+        center_x = window_geo.x() + window_geo.width() - int(110 * UI_SCALE_FACTOR) - popup_width # 靠右，在 Sidebar 左側
+        center_y = window_geo.y() + (window_geo.height() - popup_height) // 2 # 垂直置中
+        
+        popup.move(center_x, center_y)
+        popup.show()
 
     def show_range_menu(self):
-        btn_pos = self.btn_range.mapToGlobal(QPoint(0, 0))
         raw_options = RANGE_OPTIONS_AIR if self.current_speed == AIR_SPEED else RANGE_OPTIONS_WATER
         max_phys_depth = (self.current_max_samples * SAMPLE_RESOLUTION) / 100.0
         
         valid_options = [opt for opt in raw_options if (opt * 4.0) <= max_phys_depth]
+        # [優化] 過濾掉太小的選項
+        min_depth_limit = MIN_VIEW_METERS_AIR if self.current_speed == AIR_SPEED else MIN_VIEW_METERS_WATER
+        # 注意 Range Option 是每格距離，所以要 * 4 才是總深
+        valid_options = [opt for opt in valid_options if (opt * 4.0) >= min_depth_limit]
+        
         if not valid_options: valid_options = [raw_options[-1]]
             
         popup = RangePopup(self.current_zoom_samples, valid_options, self)
         popup.itemSelected.connect(self.set_range_step)
+        
+        # 使用自訂 positioning (顯示在按鈕旁)
+        btn_pos = self.btn_range.mapToGlobal(QPoint(0, 0))
         self.position_popup(popup, btn_pos)
 
     def position_popup(self, popup, btn_pos):
@@ -585,13 +669,21 @@ class WaterfallApp(QMainWindow):
             val = reg_map.get(self.lna_gain, 0x06)
             self.serial_thread.send_raw_command(struct.pack('BBB', ord('W'), 0x13, val))
 
+    # [關鍵] Zoom In 邏輯加入限制
     def zoom_in(self): 
-        min_range_step = 0.1 
-        min_total_depth = min_range_step * 4.0
-        min_allowed_samples = (min_total_depth * 100.0) / SAMPLE_RESOLUTION
-        if self.current_zoom_samples <= min_allowed_samples + 1.0: return
-        step = 200
-        self.current_zoom_samples = max(min_allowed_samples, self.current_zoom_samples - step)
+        min_total_depth_m = MIN_VIEW_METERS_AIR if self.current_speed == AIR_SPEED else MIN_VIEW_METERS_WATER
+        
+        # 將公尺限制轉換為 Samples
+        min_allowed_samples = (min_total_depth_m * 100.0) / SAMPLE_RESOLUTION
+        
+        # 檢查下一步是否會低於限制
+        next_samples = self.current_zoom_samples - 200
+        
+        if next_samples < min_allowed_samples: 
+            self.current_zoom_samples = min_allowed_samples
+        else:
+            self.current_zoom_samples = next_samples
+            
         self.update_zoom_range()
     
     def zoom_out(self): 
@@ -615,6 +707,7 @@ class WaterfallApp(QMainWindow):
             ticks.append((idx, fmt.format(d)))
             
         ax = self.waterfall.getAxis("right"); ax.setTicks([ticks])
+        ax.setTickFont(QFont("Arial", AXIS_FONT_SIZE))
         
         for item in self.waterfall.items():
             if isinstance(item, pg.InfiniteLine) and item != self.depth_line: self.waterfall.removeItem(item)
@@ -622,13 +715,16 @@ class WaterfallApp(QMainWindow):
             if idx > 0: 
                 line = pg.InfiniteLine(pos=idx, angle=0, pen=pg.mkPen(color=(150,150,150,150), style=Qt.DashLine))
                 self.waterfall.addItem(line)
+        
+        color_hex = "#FFFFFF" 
+        display_val_m = 0.0 
+        freq_text = f"&nbsp;&nbsp;{40}kHz" 
+        # Update overlay logic if needed, usually mostly handled in update_plot
 
-    # [優化] Serial Thread 回調
     def on_packet_received(self, packet):
-        self.latest_frame_data = packet[0] # raw data
-        self.latest_frame_meta = packet[1:] # meta
+        self.latest_frame_data = packet[0] 
+        self.latest_frame_meta = packet[1:] 
 
-    # [優化] Timer 回調
     def update_plot_from_buffer(self):
         if self.latest_frame_data is None: return
         
@@ -643,7 +739,6 @@ class WaterfallApp(QMainWindow):
                  self.depth_history = np.full(MAX_ROWS, np.nan)
                  self.depth_line.setData(x=np.arange(MAX_ROWS), y=self.depth_history, connect="finite")
 
-        # [優化] 向量化 DSP
         filtered = sonar_display_pipeline_optimized(raw_data, self.tvg_curve)
         
         self.data = np.roll(self.data, -1, axis=0); self.data[-1, :] = filtered
@@ -668,7 +763,7 @@ class WaterfallApp(QMainWindow):
             color_hex = "#FFFFFF" if is_reliable else "rgba(255, 255, 255, 0.2)" 
             display_val_m = (target_depth_idx * SAMPLE_RESOLUTION) / 100.0
             freq_text = f"&nbsp;&nbsp;{drive_frequency:.0f}kHz"
-            html_str = f"""<div style="text-align: left; line-height: 90%; font-family: 'Malgun Gothic';"><span style="font-size: 64pt; font-weight: 600; color: {color_hex};">{display_val_m:.1f}</span><span style="font-size: 32pt; font-weight: 600; color: {color_hex};">m</span><br><span style="font-size: 10pt; color: #cccccc; font-weight: 600;">{freq_text}</span></div>"""
+            html_str = f"""<div style="text-align: left; line-height: 90%; font-family: 'Malgun Gothic';"><span style="font-size: {OVERLAY_FONT_L}pt; font-weight: 600; color: {color_hex};">{display_val_m:.1f}</span><span style="font-size: {OVERLAY_FONT_M}pt; font-weight: 600; color: {color_hex};">m</span><br><span style="font-size: {OVERLAY_FONT_S}pt; color: #cccccc; font-weight: 600;">{freq_text}</span></div>"""
             self.depth_overlay.setHtml(html_str)
 
         self.lbl_footer_depth.setText(f"Depth: {depth_m * 100:.0f} cm"); self.lbl_footer_ovr.setText(f"Override: {ovr_m * 100:.0f} cm")
@@ -676,8 +771,14 @@ class WaterfallApp(QMainWindow):
 
     def handle_main_connect(self):
         if self.is_connected:
-            if self.serial_thread: self.serial_thread.stop(); self.serial_thread = None
-            if self.udp_thread: self.udp_thread.stop(); self.udp_thread = None
+            if self.serial_thread:
+                self.serial_thread.stop()
+                self.serial_thread.wait() # Ensure clean exit
+                self.serial_thread = None
+            if self.udp_thread: 
+                self.udp_thread.stop()
+                self.udp_thread.wait()
+                self.udp_thread = None
             self.is_connected = False; self.btn_connect.setText("Connect"); self.btn_connect.setProperty("class", "sidebar_btn"); self.btn_connect.setStyle(self.btn_connect.style()) 
             self.lbl_footer_depth.setText("Depth: ---"); self.lbl_footer_ovr.setText("Override: ---")
         else:
@@ -709,6 +810,15 @@ class WaterfallApp(QMainWindow):
                 try: self.udp_thread = UDPReader(self.udp_port_num); self.udp_thread.data_received.connect(self.waterfall_plot_callback); self.udp_thread.start()
                 except: return
             self.is_connected = True; self.btn_connect.setText("Stop"); self.btn_connect.setProperty("class", "connect_active"); self.btn_connect.setStyle(self.btn_connect.style())
+
+    def set_sound_speed(self, speed):
+        global SPEED_OF_SOUND, SAMPLE_RESOLUTION
+        SPEED_OF_SOUND = self.current_speed = speed
+        SAMPLE_RESOLUTION = (SPEED_OF_SOUND * SAMPLE_TIME * 100) / 2
+        
+        ax = self.waterfall.getAxis("right"); ax.setTickFont(QFont("Arial", AXIS_FONT_SIZE))
+        
+        self.update_zoom_range()
 
     def open_settings(self): dlg = SettingsDialog(self); dlg.exec_()
     def set_gradient(self, n): self.current_gradient = n; self.colorbar.item.gradient.loadPreset(n)
