@@ -5,16 +5,16 @@
 // ---------------------- CONFIG ----------------------
 #define MAX_SAMPLES 18000 // 靜態分配最大記憶體
 volatile uint16_t currentNumSamples = 2000; // 預設採樣數
-volatile uint8_t  currentSampleDelay = 11;  // 預設採樣延遲 (對應 Standard)
+volatile uint8_t  currentSampleDelay = 11;  // 預設採樣延遲
 
 // [新增] 盲區計算參數
-// 您原本覺得 90 點在 delay(11) 時是足夠的
-// 實際每點時間 = 11.5 + 3.4 = 14.9 us
-// 總餘震時間 = 90 * 14.9 = 1341 us
 const float ADC_OVERHEAD = 3.4f; 
 const float RINGING_DURATION_US = 90 * (11.5f + ADC_OVERHEAD); 
 
-volatile int currentBlindZone = 90; // 這個值會動態改變
+volatile int currentBlindZone = 90; 
+
+// [修改] 脈衝數量控制，預設 32 toggles (16 cycles)
+volatile int targetToggleCount = 32; 
 
 // ---------------------- PIN CONFIGURATION ----------------------
 const int SPI_CS = 10;
@@ -63,7 +63,8 @@ FspTimer burstTimer;
 void burstCallback(timer_callback_args_t *) {
   digitalWrite(IO2, !digitalRead(IO2)); 
   pulseCount++;
-  if (pulseCount >= 32) { 
+  // [修改] 使用變數 targetToggleCount
+  if (pulseCount >= targetToggleCount) { 
     burstTimer.stop();
     pulseCount = 0;  
   }
@@ -82,13 +83,11 @@ void stopTransducer() {
   digitalWrite(IO2, LOW); 
 }
 
-// [新增] 動態計算盲區點數
+// [修改] 僅計算盲區，不再自動改變 Cycles
 void calcBlindZone() {
   // 總餘震時間 / (當前Delay + 硬體開銷) = 需要避開的點數
   float timePerSample = (float)currentSampleDelay + ADC_OVERHEAD;
   currentBlindZone = (int)(RINGING_DURATION_US / timePerSample);
-  
-  // 安全限制，至少避開前 5 點
   if (currentBlindZone < 5) currentBlindZone = 5;
 }
 
@@ -149,9 +148,13 @@ void setup()
   attachInterrupt(digitalPinToInterrupt(O4), handleInterrupt, RISING);
 
   tuss4470Write(0x10, FILTER_FREQUENCY_REGISTER);  
-  tuss4470Write(0x11, 0x10);                       
-  tuss4470Write(0x16, 0xF); 
-  tuss4470Write(0x1A, 0x0F); 
+  tuss4470Write(0x11, 0x10);                        
+  
+  // [關鍵修改] 0x1A: BURST_PULSE
+  // 為了避免 TUSS 晶片在 Arduino 之前切斷電源，
+  // 我們將其設為 0x00 (Continuous Mode)，讓 Arduino 全權控制。
+  tuss4470Write(0x1A, 0x00); 
+  
   tuss4470Write(0x17, THRESHOLD_VALUE); 
   tuss4470Write(0x13, 0x06); 
 
@@ -166,7 +169,7 @@ void setup()
   ADCER = 0x0000;         
   ADCSR &= ~(1u << 5);    
   
-  // 初始化盲區計算
+  // 初始化
   calcBlindZone();
 }
 
@@ -175,8 +178,9 @@ void loop()
   detectedDepth = false; 
   depthDetectSample = 0;
 
+  // 開始發射
   tuss4470Write(0x1B, 0x01);
-  burstTimer.start();
+  burstTimer.start(); 
 
   for (sampleIndex = 0; sampleIndex < currentNumSamples; sampleIndex++) {
     ADCSR |= (1u << 15);        
@@ -186,7 +190,7 @@ void loop()
 
     delayMicroseconds(currentSampleDelay); 
 
-    // [修改] 使用動態計算的 currentBlindZone
+    // 使用動態計算的 blind zone
     if (sampleIndex == currentBlindZone) {
       detectedDepth = false;
       depthDetectSample = 0;
@@ -198,7 +202,6 @@ void loop()
   #if USE_DEPTH_OVERRIDE
   int overrideSample = 0;
   uint8_t max = 0;
-  // [修改] 使用 currentBlindZone
   for (int i = currentBlindZone; i < currentNumSamples; i++) {
     if (sampleBuffer[i] > max) {
       max = sampleBuffer[i];
@@ -237,13 +240,20 @@ void loop()
       currentNumSamples = newSamples;
     }
     else if (cmd == 'D') { 
-      byte val = Serial.read();
-      byte dummy = Serial.read(); 
+      byte val = Serial.read(); // Delay
+      byte cycles = Serial.read(); // Cycles from Python
       
       if (val < 5) val = 5;
       
       currentSampleDelay = val;
-      calcBlindZone(); // [新增] 當 Delay 改變時，重新計算 Blind Zone 點數
+      
+      // [關鍵修改] 僅更新 Arduino 計數器
+      if (cycles > 0) {
+          if (cycles > 64) cycles = 64; 
+          targetToggleCount = cycles * 2;
+      }
+      
+      calcBlindZone(); 
     }
   }
 
