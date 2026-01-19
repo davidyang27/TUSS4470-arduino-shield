@@ -26,7 +26,7 @@ except ImportError as e:
 # --- 全域配置參數 ---
 # ============================================================
 
-# [關鍵設定] 介面縮放比例
+# [關鍵設定] 介面縮放比例 (樹梅派 7吋建議 1.5 ~ 2.0)
 UI_SCALE_FACTOR = 1.5 
 
 AIR_SPEED = 343.0      
@@ -64,15 +64,17 @@ RANGE_OPTIONS_AIR = [10.0, 5.0, 4.0, 3.0, 2.0, 1.0, 0.5, 0.1]
 RANGE_OPTIONS_WATER = [40.0, 20.0, 10.0, 5.0, 4.0, 3.0, 2.0, 1.0]
 
 # [關鍵修改] 最小總可視深度 (單位：公尺)
-# 總深度 = 視窗顯示的最上到最下的距離
-MIN_VIEW_METERS_AIR = 0.5   # 空氣：允許縮到總深 0.5m
-MIN_VIEW_METERS_WATER = 1.8 # 水中：限制在總深 1.8m (您要求的極限)
+MIN_VIEW_METERS_AIR = 0.5   
+MIN_VIEW_METERS_WATER = 1.8 
 
 SPEED_OPTIONS = [
     ("Standard (11.5us)", 11.5), 
     ("Long Range (25us)", 25.0), 
     ("Ultra Range (50us)", 50.0) 
 ]
+
+# [新增] Cycles 選項，加入 128
+CYCLES_OPTIONS = ["8", "16", "32", "64", "128"]
 
 # --- [自動計算] 根據縮放比例計算 UI 尺寸 ---
 SIDEBAR_BTN_HEIGHT = int(60 * UI_SCALE_FACTOR)
@@ -324,8 +326,9 @@ class SettingsDialog(QDialog):
         self.source_combo.currentTextChanged.connect(self.update_inputs); self.update_inputs(self.source_combo.currentText())
         scroll_layout.addWidget(conn_group)
 
-        # 2. Display
-        disp_group = QGroupBox("DISPLAY"); disp_layout = QFormLayout(disp_group); disp_layout.setContentsMargins(8, 8, 8, 8); disp_layout.setVerticalSpacing(int(6 * UI_SCALE_FACTOR))
+        # 2. [修改] SONAR Group
+        sonar_group = QGroupBox("SONAR"); sonar_layout = QFormLayout(sonar_group); sonar_layout.setContentsMargins(8, 8, 8, 8); sonar_layout.setVerticalSpacing(int(6 * UI_SCALE_FACTOR))
+        
         self.speed_dropdown = QComboBox(); self.speed_dropdown.addItems([f"{AIR_SPEED} m/s (Air)", f"{WATER_SPEED} m/s (Water)"]); self.speed_dropdown.setCurrentIndex(1 if self.main_app.current_speed == WATER_SPEED else 0)
         
         self.delay_combo = QComboBox()
@@ -337,24 +340,34 @@ class SettingsDialog(QDialog):
                 self.delay_combo.setCurrentIndex(i)
                 break
         
+        # [新增] Cycles 選單，包含 128
+        self.cycles_combo = QComboBox()
+        self.cycles_combo.addItems(CYCLES_OPTIONS)
+        self.cycles_combo.setCurrentText(str(self.main_app.current_cycles))
+
+        sonar_layout.addRow("Env:", self.speed_dropdown)
+        sonar_layout.addRow("Speed:", self.delay_combo)
+        sonar_layout.addRow("Cycles:", self.cycles_combo)
+        scroll_layout.addWidget(sonar_group)
+
+        # 3. [修改] DISPLAY Group
+        disp_group = QGroupBox("DISPLAY"); disp_layout = QFormLayout(disp_group); disp_layout.setContentsMargins(8, 8, 8, 8); disp_layout.setVerticalSpacing(int(6 * UI_SCALE_FACTOR))
         self.large_depth_checkbox = QCheckBox("Show Depth"); self.large_depth_checkbox.setChecked(self.main_app.large_depth_visible)
         self.overlay_mode_combo = QComboBox(); self.overlay_mode_combo.addItems(["Auto (Threshold)", "Override (Max)"]); self.overlay_mode_combo.setCurrentIndex(0 if self.main_app.depth_overlay_mode == "Auto" else 1)
         self.show_line_checkbox = QCheckBox("Show Depth Profile"); self.show_line_checkbox.setChecked(self.main_app.show_depth_line)
         self.line_mode_combo = QComboBox(); self.line_mode_combo.addItems(["Follow Auto", "Follow Override"]); self.line_mode_combo.setCurrentIndex(0 if self.main_app.depth_line_mode == "Auto" else 1)
         
-        disp_layout.addRow("Env:", self.speed_dropdown)
-        disp_layout.addRow("Speed:", self.delay_combo)
         disp_layout.addRow(self.large_depth_checkbox); disp_layout.addRow("Src:", self.overlay_mode_combo); disp_layout.addRow(self.show_line_checkbox); disp_layout.addRow("Line:", self.line_mode_combo)
         scroll_layout.addWidget(disp_group)
 
-        # 3. NMEA
+        # 4. NMEA
         nmea_group = QGroupBox("NMEA TCP"); nmea_layout = QFormLayout(nmea_group); nmea_layout.setContentsMargins(8, 8, 8, 8); nmea_layout.setVerticalSpacing(int(6 * UI_SCALE_FACTOR))
         self.nmea_checkbox = QCheckBox("Enable"); self.nmea_checkbox.setChecked(self.main_app.nmea_output_enabled)
         self.nmea_port_input = QLineEdit(str(self.main_app.nmea_port))
         nmea_layout.addRow("On:", self.nmea_checkbox); nmea_layout.addRow("Port:", self.nmea_port_input)
         scroll_layout.addWidget(nmea_group)
 
-        # 4. Register
+        # 5. Register
         reg_group = QGroupBox("REGISTER"); reg_layout = QVBoxLayout(reg_group); reg_layout.setContentsMargins(8, 15, 8, 8); reg_layout.setSpacing(10)
         echo_layout = QHBoxLayout()
         self.lbl_echo_title = QLabel("Echo Thr:")
@@ -415,8 +428,12 @@ class SettingsDialog(QDialog):
             self.main_app.change_resolution(new_samples)
             
         new_delay = self.delay_combo.currentData()
-        if abs(new_delay - self.main_app.current_sample_delay) > 0.1:
-            self.main_app.set_sample_delay(new_delay)
+        # [修改] 讀取 cycles
+        new_cycles = int(self.cycles_combo.currentText())
+        self.main_app.current_cycles = new_cycles
+        
+        # 強制更新 Delay 與 Cycles
+        self.main_app.set_sample_delay(new_delay)
 
         speed = AIR_SPEED if self.speed_dropdown.currentIndex() == 0 else WATER_SPEED
         if speed != self.main_app.current_speed:
@@ -453,6 +470,9 @@ class WaterfallApp(QMainWindow):
         self.saved_echo_thr = 16 
         self.min_zoom_samples = 20 
         self.current_sample_delay = CURRENT_SAMPLE_DELAY_US
+        
+        # [新增] 預設 Cycles
+        self.current_cycles = 16 
         
         self.tvg_curve = np.linspace(1.0, TVG_STRENGTH, self.current_max_samples)
         
@@ -594,16 +614,18 @@ class WaterfallApp(QMainWindow):
         self.current_zoom_samples = self.current_max_samples
         self.update_zoom_range()
 
+    # [關鍵修改] 發送 Delay 以及 Cycles
     def set_sample_delay(self, delay_us):
         global SAMPLE_TIME, SAMPLE_RESOLUTION
-        print(f"[System] Changing sample delay to {delay_us} us")
+        print(f"[System] Changing sample delay to {delay_us} us, Cycles to {self.current_cycles}")
         self.current_sample_delay = delay_us
         SAMPLE_TIME = (delay_us + 3.4) * 1e-6
         SAMPLE_RESOLUTION = (self.current_speed * SAMPLE_TIME * 100) / 2
         
         if self.serial_thread and self.serial_thread.isRunning():
             val = int(delay_us)
-            cmd = struct.pack('BBB', ord('D'), val, 0)
+            # [指令] D, delay, cycles
+            cmd = struct.pack('BBB', ord('D'), val, int(self.current_cycles))
             self.serial_thread.send_raw_command(cmd)
         self.update_zoom_range()
 
@@ -769,6 +791,15 @@ class WaterfallApp(QMainWindow):
         self.lbl_footer_depth.setText(f"Depth: {depth_m * 100:.0f} cm"); self.lbl_footer_ovr.setText(f"Override: {ovr_m * 100:.0f} cm")
         self.latest_frame_data = None
 
+    def set_sound_speed(self, speed):
+        global SPEED_OF_SOUND, SAMPLE_RESOLUTION
+        SPEED_OF_SOUND = self.current_speed = speed
+        SAMPLE_RESOLUTION = (SPEED_OF_SOUND * SAMPLE_TIME * 100) / 2
+        
+        ax = self.waterfall.getAxis("right"); ax.setTickFont(QFont("Arial", AXIS_FONT_SIZE))
+        
+        self.update_zoom_range()
+
     def handle_main_connect(self):
         if self.is_connected:
             if self.serial_thread:
@@ -794,8 +825,9 @@ class WaterfallApp(QMainWindow):
                 self.serial_thread.send_raw_command(cmd)
                 QThread.msleep(50)
                 
+                # [關鍵修改] 傳送初始 Delay 與 Cycles
                 val = int(self.current_sample_delay)
-                cmd = struct.pack('BBB', ord('D'), val, 0)
+                cmd = struct.pack('BBB', ord('D'), val, int(self.current_cycles))
                 self.serial_thread.send_raw_command(cmd)
                 QThread.msleep(50)
                 
@@ -810,15 +842,6 @@ class WaterfallApp(QMainWindow):
                 try: self.udp_thread = UDPReader(self.udp_port_num); self.udp_thread.data_received.connect(self.waterfall_plot_callback); self.udp_thread.start()
                 except: return
             self.is_connected = True; self.btn_connect.setText("Stop"); self.btn_connect.setProperty("class", "connect_active"); self.btn_connect.setStyle(self.btn_connect.style())
-
-    def set_sound_speed(self, speed):
-        global SPEED_OF_SOUND, SAMPLE_RESOLUTION
-        SPEED_OF_SOUND = self.current_speed = speed
-        SAMPLE_RESOLUTION = (SPEED_OF_SOUND * SAMPLE_TIME * 100) / 2
-        
-        ax = self.waterfall.getAxis("right"); ax.setTickFont(QFont("Arial", AXIS_FONT_SIZE))
-        
-        self.update_zoom_range()
 
     def open_settings(self): dlg = SettingsDialog(self); dlg.exec_()
     def set_gradient(self, n): self.current_gradient = n; self.colorbar.item.gradient.loadPreset(n)
