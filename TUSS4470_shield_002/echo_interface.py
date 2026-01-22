@@ -1,7 +1,4 @@
 import sys
-import numpy as np
-import serial
-import serial.tools.list_ports
 import struct
 import time
 import socket
@@ -9,33 +6,31 @@ import queue
 import os
 import datetime
 
-# 嘗試匯入 PyQt5，失敗則提示
-try:
-    from PyQt5.QtWidgets import (
-        QApplication,
-        QMainWindow,
-        QVBoxLayout,
-        QWidget,
-        QComboBox,
-        QPushButton,
-        QLabel,
-        QLineEdit,
-        QHBoxLayout,
-        QCheckBox,
-        QDialog,
-        QFormLayout,
-        QFrame,
-        QSizePolicy,
-        QGroupBox,
-        QScrollArea,
-        QFileDialog,
-    )
-    from PyQt5.QtCore import QThread, pyqtSignal, Qt, QRectF, QPoint, QTimer
-    from PyQt5.QtGui import QColor, QFont, QPainter, QPen
-    import pyqtgraph as pg
-except ImportError as e:
-    print(f"CRITICAL ERROR: Missing libraries. {e}")
-    sys.exit(1)
+import numpy as np
+import serial
+import serial.tools.list_ports
+from PyQt5.QtWidgets import (
+    QApplication,
+    QMainWindow,
+    QVBoxLayout,
+    QWidget,
+    QComboBox,
+    QPushButton,
+    QLabel,
+    QLineEdit,
+    QHBoxLayout,
+    QCheckBox,
+    QDialog,
+    QFormLayout,
+    QFrame,
+    QSizePolicy,
+    QGroupBox,
+    QScrollArea,
+    QFileDialog,
+)
+from PyQt5.QtCore import QThread, pyqtSignal, Qt, QRectF, QPoint, QTimer
+from PyQt5.QtGui import QColor, QFont, QPainter, QPen
+import pyqtgraph as pg
 
 # ============================================================
 # --- 全域配置參數 ---
@@ -131,7 +126,7 @@ def read_packet(ser):
         return None
 
     try:
-        start, depth, freq_scaled, vDrv_scaled, num_samples = struct.unpack(
+        _, depth, freq_scaled, vDrv_scaled, num_samples = struct.unpack(
             "<BHhHH", header_bytes
         )
     except struct.error:
@@ -1153,7 +1148,7 @@ class WaterfallApp(QMainWindow):
         pad_top = self.current_zoom_samples * 0.02
         pad_bottom = self.current_zoom_samples * 0.02
         self.waterfall.setYRange(
-            -pad_top, self.current_zoom_samples + pad_bottom, padding=0
+            -pad_top, self.current_zoom_samples + pad_bottom
         )
         overlay_pos = self.current_zoom_samples - (self.current_zoom_samples * 0.05)
         self.depth_overlay.setPos(10, overlay_pos)
