@@ -323,7 +323,8 @@ class ColorPopup(BasePopup):
                     btn.setProperty("active", True)
                 btn.clicked.connect(lambda checked, n=name: self.handle_click(n))
                 layout.addWidget(btn)
-            except Exception:
+            except Exception as e:
+                print(f"[Error] {e}")
                 continue
 
         self.setFixedWidth(int(140 * UI_SCALE_FACTOR))
@@ -844,14 +845,14 @@ class WaterfallApp(QMainWindow):
             QPushButton.connect_active:hover {{ background-color: #3e4145; }}
             
             /* [新增] 錄製按鈕樣式 (紅色當作 Recording) */
-            QPushButton.record_active {{ 
-                background-color: #aa0000; 
-                border: none; 
-                border-bottom: 1px solid #3e4145; 
-                color: white; 
-                font-size: {SIDEBAR_FONT_SIZE}px; 
-                font-weight: bold; 
-                padding: 10px; 
+            QPushButton.record_active {{
+                background-color: #aa0000;
+                border: none;
+                border-bottom: 1px solid #3e4145;
+                color: white;
+                font-size: {SIDEBAR_FONT_SIZE}px;
+                font-weight: bold;
+                padding: 10px;
             }}
             QPushButton.record_active:hover {{ background-color: #cc0000; }}
 
@@ -928,7 +929,8 @@ class WaterfallApp(QMainWindow):
         self.colorbar.setImageItem(self.imageitem)
         try:
             self.colorbar.item.gradient.loadPreset(self.current_gradient)
-        except Exception:
+        except Exception as e:
+            print(f"[Error] {e}")
             pass
 
         sidebar = QFrame()
@@ -949,16 +951,16 @@ class WaterfallApp(QMainWindow):
         self.btn_plus.setFixedHeight(SIDEBAR_BTN_HEIGHT)
         self.btn_plus.setStyleSheet(
             f"""
-            QPushButton {{ 
-                background-color: transparent; 
-                border: none; 
-                border-bottom: 1px solid #3e4145; 
-                border-right: 1px solid #3e4145; 
-                color: #ccc; 
+            QPushButton {{
+                background-color: transparent;
+                border: none;
+                border-bottom: 1px solid #3e4145;
+                border-right: 1px solid #3e4145;
+                color: #ccc;
                 font-family: 'Malgun Gothic';
-                font-size: {ZOOM_FONT_SIZE}px; 
-                font-weight: bold; 
-                border-radius: 0px; 
+                font-size: {ZOOM_FONT_SIZE}px;
+                font-weight: bold;
+                border-radius: 0px;
             }}
             QPushButton:hover {{ background-color: #3e4145; color: white; }}
             QPushButton:pressed {{ background-color: #1a1a1a; color: #00aaff; }}
@@ -970,15 +972,15 @@ class WaterfallApp(QMainWindow):
         self.btn_minus.setFixedHeight(SIDEBAR_BTN_HEIGHT)
         self.btn_minus.setStyleSheet(
             f"""
-            QPushButton {{ 
-                background-color: transparent; 
-                border: none; 
-                border-bottom: 1px solid #3e4145; 
-                color: #ccc; 
+            QPushButton {{
+                background-color: transparent;
+                border: none;
+                border-bottom: 1px solid #3e4145;
+                color: #ccc;
                 font-family: 'Malgun Gothic';
-                font-size: {ZOOM_FONT_SIZE}px; 
-                font-weight: bold; 
-                border-radius: 0px; 
+                font-size: {ZOOM_FONT_SIZE}px;
+                font-weight: bold;
+                border-radius: 0px;
             }}
             QPushButton:hover {{ background-color: #3e4145; color: white; }}
             QPushButton:pressed {{ background-color: #1a1a1a; color: #00aaff; }}
@@ -1225,65 +1227,134 @@ class WaterfallApp(QMainWindow):
                 self.current_sample_delay,
                 self.current_cycles,
             )
+    # ============================================================
+    # --- Helper methods for update_plot_from_buffer (Refactored)
+    # ============================================================
+
+    def _sync_buffer_size(self, raw_data):
+        """Ensure internal buffers match incoming data size."""
+        if len(raw_data) == self.current_max_samples:
+            return
+
+        self.current_max_samples = len(raw_data)
+        self.data = np.zeros((MAX_ROWS, self.current_max_samples))
+        self.tvg_curve = np.linspace(
+            1.0, TVG_STRENGTH, self.current_max_samples
+        )
+        self.depth_history = np.full(MAX_ROWS, np.nan)
+        self.depth_line.setData(
+            x=np.arange(MAX_ROWS),
+            y=self.depth_history,
+            connect="finite",
+        )
+
+    def _update_waterfall_image(self, filtered_line):
+        """Update rolling waterfall image."""
+        self.data = np.roll(self.data, -1, axis=0)
+        self.data[-1, :] = filtered_line
+        self.imageitem.setImage(self.data.T, autoLevels=False)
+        self.imageitem.setLevels((10, 220))
+
+    def _compute_depth_value(self, depth_idx, override_idx):
+        """Determine reliable depth index and reliability flag."""
+        not_blind = depth_idx > PYTHON_IGNORE_INDEX
+        diff = abs(int(depth_idx) - int(override_idx))
+        is_consistent = diff <= INDEX_TOLERANCE
+        is_reliable = not_blind and is_consistent
+
+        target_idx = (
+            depth_idx if self.depth_line_mode == "Auto" else override_idx
+        )
+
+        return (target_idx if is_reliable else np.nan), is_reliable
+
+    def _update_depth_line(self, depth_value):
+        """Update depth history curve."""
+        self.depth_history = np.roll(self.depth_history, -1)
+        self.depth_history[-1] = depth_value
+
+        if self.show_depth_line:
+            self.depth_line.setData(
+                x=np.arange(MAX_ROWS),
+                y=self.depth_history,
+                connect="finite",
+            )
+            self.depth_line.show()
+        else:
+            self.depth_line.hide()
+
+    def _update_depth_overlay(
+        self,
+        depth_idx,
+        override_idx,
+        drive_frequency,
+        is_reliable,
+    ):
+        """Update overlay text and footer labels."""
+        depth_m = (depth_idx * SAMPLE_RESOLUTION) / 100.0
+        ovr_m = (override_idx * SAMPLE_RESOLUTION) / 100.0
+
+        self.lbl_footer_depth.setText(f"Depth: {depth_m * 100:.0f} cm")
+        self.lbl_footer_ovr.setText(f"Override: {ovr_m * 100:.0f} cm")
+
+        if not self.large_depth_visible:
+            return
+
+        color_hex = "#FFFFFF" if is_reliable else "rgba(255, 255, 255, 0.2)"
+        display_m = depth_m if is_reliable else 0.0
+        freq_text = f"&nbsp;&nbsp;{drive_frequency:.0f}kHz"
+
+        html_str = f"""
+        <div style="text-align: left; line-height: 90%; font-family: 'Malgun Gothic';">
+            <span style="font-size: {OVERLAY_FONT_L}pt; font-weight: 600; color: {color_hex};">
+                {display_m:.1f}
+            </span>
+            <span style="font-size: {OVERLAY_FONT_M}pt; font-weight: 600; color: {color_hex};">
+                m
+            </span><br>
+            <span style="font-size: {OVERLAY_FONT_S}pt; color: #cccccc; font-weight: 600;">
+                {freq_text}
+            </span>
+        </div>
+        """
+        self.depth_overlay.setHtml(html_str)
 
     def update_plot_from_buffer(self):
         if self.latest_frame_data is None:
             return
 
         raw_data = self.latest_frame_data
-        depth_index, drive_frequency, override_idx = self.latest_frame_meta
+        depth_idx, drive_frequency, override_idx = self.latest_frame_meta
 
-        if len(raw_data) != self.current_max_samples:
-            if abs(len(raw_data) - self.current_max_samples) > 0:
-                self.current_max_samples = len(raw_data)
-                self.data = np.zeros((MAX_ROWS, self.current_max_samples))
-                self.tvg_curve = np.linspace(
-                    1.0, TVG_STRENGTH, self.current_max_samples
-                )
-                self.depth_history = np.full(MAX_ROWS, np.nan)
-                self.depth_line.setData(
-                    x=np.arange(MAX_ROWS), y=self.depth_history, connect="finite"
-                )
+        # 1. Sync buffer size if incoming data size changed
+        self._sync_buffer_size(raw_data)
 
-        filtered = sonar_display_pipeline_optimized(raw_data, self.tvg_curve)
-
-        self.data = np.roll(self.data, -1, axis=0)
-        self.data[-1, :] = filtered
-        self.imageitem.setImage(self.data.T, autoLevels=False)
-        self.imageitem.setLevels((10, 220))
-
-        depth_m = (depth_index * SAMPLE_RESOLUTION) / 100.0
-        ovr_m = (override_idx * SAMPLE_RESOLUTION) / 100.0
-
-        not_blind = depth_index > PYTHON_IGNORE_INDEX
-        diff = abs(int(depth_index) - int(override_idx))
-        is_consistent = diff <= INDEX_TOLERANCE
-        is_reliable = not_blind and is_consistent
-        target_depth_idx = (
-            depth_index if self.depth_line_mode == "Auto" else override_idx
+        # 2. DSP pipeline
+        filtered = sonar_display_pipeline_optimized(
+            raw_data, self.tvg_curve
         )
-        val_to_plot = target_depth_idx if is_reliable else np.nan
 
-        self.depth_history = np.roll(self.depth_history, -1)
-        self.depth_history[-1] = val_to_plot
-        if self.show_depth_line:
-            self.depth_line.setData(
-                x=np.arange(MAX_ROWS), y=self.depth_history, connect="finite"
-            )
-            self.depth_line.show()
-        else:
-            self.depth_line.hide()
+        # 3. Update waterfall image
+        self._update_waterfall_image(filtered)
 
-        if self.large_depth_visible:
-            color_hex = "#FFFFFF" if is_reliable else "rgba(255, 255, 255, 0.2)"
-            display_val_m = (target_depth_idx * SAMPLE_RESOLUTION) / 100.0
-            freq_text = f"&nbsp;&nbsp;{drive_frequency:.0f}kHz"
-            html_str = f"""<div style="text-align: left; line-height: 90%; font-family: 'Malgun Gothic';"><span style="font-size: {OVERLAY_FONT_L}pt; font-weight: 600; color: {color_hex};">{display_val_m:.1f}</span><span style="font-size: {OVERLAY_FONT_M}pt; font-weight: 600; color: {color_hex};">m</span><br><span style="font-size: {OVERLAY_FONT_S}pt; color: #cccccc; font-weight: 600;">{freq_text}</span></div>"""
-            self.depth_overlay.setHtml(html_str)
+        # 4. Compute depth value and reliability
+        depth_value, is_reliable = self._compute_depth_value(
+            depth_idx, override_idx
+        )
 
-        self.lbl_footer_depth.setText(f"Depth: {depth_m * 100:.0f} cm")
-        self.lbl_footer_ovr.setText(f"Override: {ovr_m * 100:.0f} cm")
+        # 5. Update depth line history
+        self._update_depth_line(depth_value)
+
+        # 6. Update overlay and footer
+        self._update_depth_overlay(
+            depth_idx,
+            override_idx,
+            drive_frequency,
+            is_reliable,
+        )
+
         self.latest_frame_data = None
+
 
     # [新增] 處理錄製開關
     def toggle_recording(self):
@@ -1404,7 +1475,8 @@ class WaterfallApp(QMainWindow):
                     self.udp_thread = UDPReader(self.udp_port_num)
                     self.udp_thread.data_received.connect(self.waterfall_plot_callback)
                     self.udp_thread.start()
-                except Exception:
+                except Exception as e:
+                    print(f"[Error] {e}")
                     return
             self.is_connected = True
             self.btn_connect.setText("Stop")
