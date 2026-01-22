@@ -494,114 +494,86 @@ class UDPReader(QThread):
                 try:
                     data, _ = sock.recvfrom(65536)
                     pass
-                except socket.timeout:
+                except Exception:
                     continue
-                except OSError:
-                    continue
-
         finally:
             sock.close()
 
 
 # --- SettingsDialog ---
-# pylint: disable=attribute-defined-outside-init
 class SettingsDialog(QDialog):
     def __init__(self, parent):
         super().__init__(parent)
         self.main_app = parent
-        self.echo_thr_val = self.main_app.saved_echo_thr
-
         self.setWindowTitle("Config")
         self.resize(int(320 * UI_SCALE_FACTOR), int(580 * UI_SCALE_FACTOR))
+        self.echo_thr_val = self.main_app.saved_echo_thr
 
-        self._setup_style()
-        self._build_ui()
-
-    # ------------------------------------------------------------
-    # UI setup helpers
-    # ------------------------------------------------------------
-
-    def _setup_style(self):
         lbl_size = int(11 * UI_SCALE_FACTOR)
+
         self.setStyleSheet(
             f"""
             QDialog {{ background-color: #2b2b2b; color: #e0e0e0; font-family: 'Malgun Gothic', Arial; }}
             QLabel {{ color: #e0e0e0; font-weight: bold; font-size: {lbl_size}px; }}
-            QComboBox, QLineEdit {{ background-color: #3a3a3a; border: 1px solid #555; color: white; padding: 3px; border-radius: 2px; font-size: {lbl_size}px; }}
+            QComboBox, QLineEdit {{ background-color: #3a3a3a; border: 1px solid #555; color: white; padding: 3px; border-radius: 2px; font-size: {lbl_size}px; min-height: {int(18 * UI_SCALE_FACTOR)}px; }}
+            QComboBox::drop-down {{ subcontrol-origin: padding; subcontrol-position: top right; width: {int(20 * UI_SCALE_FACTOR)}px; border-left: 1px solid #555; background-color: #444; }}
+            QComboBox::down-arrow {{ width: 0px; height: 0px; border-left: 4px solid transparent; border-right: 4px solid transparent; border-top: 5px solid #ffffff; margin-top: 1px; margin-right: 1px; }}
             QPushButton {{ background-color: #444; border: 1px solid #666; color: white; padding: 6px; border-radius: 3px; font-weight: bold; font-size: {SETTINGS_FONT_SIZE}px; }}
+            QPushButton:hover {{ background-color: #555; border-color: #777; }}
             QPushButton#applyBtn {{ background-color: #0078d7; border-color: #005a9e; }}
             QPushButton#applyBtn:hover {{ background-color: #006cbd; }}
             QGroupBox {{ border: 1px solid #555; border-radius: 4px; margin-top: 10px; padding-top: 5px; font-weight: bold; font-size: {SETTINGS_FONT_SIZE}px; }}
             QGroupBox::title {{ subcontrol-origin: margin; subcontrol-position: top left; left: 7px; padding: 0 2px; background-color: #2b2b2b; color: #00b4ff; }}
             QScrollArea {{ border: none; background-color: transparent; }}
             QWidget#scrollContent {{ background-color: transparent; }}
-            """
+        """
         )
 
-    def _build_ui(self):
         main_layout = QVBoxLayout(self)
-        scroll, scroll_layout = self._create_scroll_area()
-
-        scroll_layout.addWidget(self._build_connection_group())
-        scroll_layout.addWidget(self._build_sonar_group())
-        scroll_layout.addWidget(self._build_display_group())
-        scroll_layout.addWidget(self._build_nmea_group())
-        scroll_layout.addWidget(self._build_register_group())
-        scroll_layout.addStretch()
-
-        scroll.setWidget(scroll_layout.parent())
-        main_layout.addWidget(scroll)
-        main_layout.addLayout(self._build_button_bar())
-
-    def _create_scroll_area(self):
+        main_layout.setContentsMargins(2, 2, 2, 2)
+        main_layout.setSpacing(2)
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
+        scroll_content = QWidget()
+        scroll_content.setObjectName("scrollContent")
+        scroll_layout = QVBoxLayout(scroll_content)
+        scroll_layout.setSpacing(int(8 * UI_SCALE_FACTOR))
+        scroll_layout.setContentsMargins(5, 5, 5, 5)
 
-        content = QWidget()
-        content.setObjectName("scrollContent")
-        layout = QVBoxLayout(content)
-        layout.setSpacing(int(8 * UI_SCALE_FACTOR))
-        layout.setContentsMargins(5, 5, 5, 5)
-
-        return scroll, layout
-
-    # ------------------------------------------------------------
-    # Group builders
-    # ------------------------------------------------------------
-
-    def _build_connection_group(self):
-        group = QGroupBox("CONNECTION")
-        layout = QFormLayout(group)
-
+        # 1. Connection
+        conn_group = QGroupBox("CONNECTION")
+        conn_layout = QFormLayout(conn_group)
+        conn_layout.setContentsMargins(8, 8, 8, 8)
+        conn_layout.setVerticalSpacing(int(6 * UI_SCALE_FACTOR))
         self.source_combo = QComboBox()
         self.source_combo.addItems(["Serial Port", "UDP Stream"])
         self.source_combo.setCurrentText(self.main_app.connection_source)
-
         self.serial_combo = QComboBox()
         self.serial_combo.addItems(get_serial_ports())
         self.serial_combo.setCurrentText(self.main_app.serial_port_name)
-
         self.udp_port_input = QLineEdit(str(self.main_app.udp_port_num))
 
         self.res_combo = QComboBox()
         self.res_combo.addItems(["2000", "4000", "8000", "12000", "18000"])
-        idx = self.res_combo.findText(str(self.main_app.current_max_samples))
-        if idx >= 0:
-            self.res_combo.setCurrentIndex(idx)
+        current_res_str = str(self.main_app.current_max_samples)
+        index = self.res_combo.findText(current_res_str)
+        if index >= 0:
+            self.res_combo.setCurrentIndex(index)
 
-        layout.addRow("Type:", self.source_combo)
-        layout.addRow("Port:", self.serial_combo)
-        layout.addRow("UDP:", self.udp_port_input)
-        layout.addRow("Samples:", self.res_combo)
+        conn_layout.addRow("Type:", self.source_combo)
+        conn_layout.addRow("Port:", self.serial_combo)
+        conn_layout.addRow("UDP:", self.udp_port_input)
+        conn_layout.addRow("Samples:", self.res_combo)
 
         self.source_combo.currentTextChanged.connect(self.update_inputs)
         self.update_inputs(self.source_combo.currentText())
+        scroll_layout.addWidget(conn_group)
 
-        return group
-
-    def _build_sonar_group(self):
-        group = QGroupBox("SONAR")
-        layout = QFormLayout(group)
+        # 2. SONAR Group
+        sonar_group = QGroupBox("SONAR")
+        sonar_layout = QFormLayout(sonar_group)
+        sonar_layout.setContentsMargins(8, 8, 8, 8)
+        sonar_layout.setVerticalSpacing(int(6 * UI_SCALE_FACTOR))
 
         self.speed_dropdown = QComboBox()
         self.speed_dropdown.addItems(
@@ -614,9 +586,9 @@ class SettingsDialog(QDialog):
         self.delay_combo = QComboBox()
         for label, val in SPEED_OPTIONS:
             self.delay_combo.addItem(label, val)
-
+        curr_delay = self.main_app.current_sample_delay
         for i in range(self.delay_combo.count()):
-            if abs(self.delay_combo.itemData(i) - self.main_app.current_sample_delay) < 0.1:
+            if abs(self.delay_combo.itemData(i) - curr_delay) < 0.1:
                 self.delay_combo.setCurrentIndex(i)
                 break
 
@@ -624,95 +596,110 @@ class SettingsDialog(QDialog):
         self.cycles_combo.addItems(CYCLES_OPTIONS)
         self.cycles_combo.setCurrentText(str(self.main_app.current_cycles))
 
-        layout.addRow("Env:", self.speed_dropdown)
-        layout.addRow("Speed:", self.delay_combo)
-        layout.addRow("Cycles:", self.cycles_combo)
+        sonar_layout.addRow("Env:", self.speed_dropdown)
+        sonar_layout.addRow("Speed:", self.delay_combo)
+        sonar_layout.addRow("Cycles:", self.cycles_combo)
+        scroll_layout.addWidget(sonar_group)
 
-        return group
-
-    def _build_display_group(self):
-        group = QGroupBox("DISPLAY")
-        layout = QFormLayout(group)
-
+        # 3. DISPLAY Group
+        disp_group = QGroupBox("DISPLAY")
+        disp_layout = QFormLayout(disp_group)
+        disp_layout.setContentsMargins(8, 8, 8, 8)
+        disp_layout.setVerticalSpacing(int(6 * UI_SCALE_FACTOR))
         self.large_depth_checkbox = QCheckBox("Show Depth")
         self.large_depth_checkbox.setChecked(self.main_app.large_depth_visible)
-
         self.overlay_mode_combo = QComboBox()
         self.overlay_mode_combo.addItems(["Auto (Threshold)", "Override (Max)"])
         self.overlay_mode_combo.setCurrentIndex(
             0 if self.main_app.depth_overlay_mode == "Auto" else 1
         )
-
         self.show_line_checkbox = QCheckBox("Show Depth Profile")
         self.show_line_checkbox.setChecked(self.main_app.show_depth_line)
-
         self.line_mode_combo = QComboBox()
         self.line_mode_combo.addItems(["Follow Auto", "Follow Override"])
         self.line_mode_combo.setCurrentIndex(
             0 if self.main_app.depth_line_mode == "Auto" else 1
         )
 
-        layout.addRow(self.large_depth_checkbox)
-        layout.addRow("Src:", self.overlay_mode_combo)
-        layout.addRow(self.show_line_checkbox)
-        layout.addRow("Line:", self.line_mode_combo)
+        disp_layout.addRow(self.large_depth_checkbox)
+        disp_layout.addRow("Src:", self.overlay_mode_combo)
+        disp_layout.addRow(self.show_line_checkbox)
+        disp_layout.addRow("Line:", self.line_mode_combo)
+        scroll_layout.addWidget(disp_group)
 
-        return group
-
-    def _build_nmea_group(self):
-        group = QGroupBox("NMEA TCP")
-        layout = QFormLayout(group)
-
+        # 4. NMEA
+        nmea_group = QGroupBox("NMEA TCP")
+        nmea_layout = QFormLayout(nmea_group)
+        nmea_layout.setContentsMargins(8, 8, 8, 8)
+        nmea_layout.setVerticalSpacing(int(6 * UI_SCALE_FACTOR))
         self.nmea_checkbox = QCheckBox("Enable")
         self.nmea_checkbox.setChecked(self.main_app.nmea_output_enabled)
-
         self.nmea_port_input = QLineEdit(str(self.main_app.nmea_port))
+        nmea_layout.addRow("On:", self.nmea_checkbox)
+        nmea_layout.addRow("Port:", self.nmea_port_input)
+        scroll_layout.addWidget(nmea_group)
 
-        layout.addRow("On:", self.nmea_checkbox)
-        layout.addRow("Port:", self.nmea_port_input)
-
-        return group
-
-    def _build_register_group(self):
-        group = QGroupBox("REGISTER")
-        layout = QVBoxLayout(group)
-
+        # 5. Register
+        reg_group = QGroupBox("REGISTER")
+        reg_layout = QVBoxLayout(reg_group)
+        reg_layout.setContentsMargins(8, 15, 8, 8)
+        reg_layout.setSpacing(10)
+        echo_layout = QHBoxLayout()
+        self.lbl_echo_title = QLabel("Echo Thr:")
+        self.btn_echo_minus = QPushButton("-")
+        self.btn_echo_minus.setFixedSize(
+            int(25 * UI_SCALE_FACTOR), int(20 * UI_SCALE_FACTOR)
+        )
+        self.btn_echo_minus.clicked.connect(self.decrease_echo_thr)
         self.lbl_echo_val = QLabel(str(self.echo_thr_val))
+        self.lbl_echo_val.setAlignment(Qt.AlignCenter)
+        self.lbl_echo_val.setFixedWidth(int(25 * UI_SCALE_FACTOR))
+        self.btn_echo_plus = QPushButton("+")
+        self.btn_echo_plus.setFixedSize(
+            int(25 * UI_SCALE_FACTOR), int(20 * UI_SCALE_FACTOR)
+        )
+        self.btn_echo_plus.clicked.connect(self.increase_echo_thr)
+        self.btn_echo_send = QPushButton("Send")
+        self.btn_echo_send.setCursor(Qt.PointingHandCursor)
+        self.btn_echo_send.setFixedWidth(int(50 * UI_SCALE_FACTOR))
+        self.btn_echo_send.clicked.connect(self.send_echo_thr_cmd)
+        echo_layout.addWidget(self.lbl_echo_title)
+        echo_layout.addWidget(self.btn_echo_minus)
+        echo_layout.addWidget(self.lbl_echo_val)
+        echo_layout.addWidget(self.btn_echo_plus)
+        echo_layout.addStretch()
+        echo_layout.addWidget(self.btn_echo_send)
 
-        btn_minus = QPushButton("-")
-        btn_minus.clicked.connect(self.decrease_echo_thr)
+        custom_layout = QHBoxLayout()
+        self.lbl_raw_title = QLabel("Raw Reg:")
+        self.reg_input = QLineEdit()
+        self.reg_input.setPlaceholderText("Addr, Data")
+        self.reg_btn = QPushButton("Send")
+        self.reg_btn.setCursor(Qt.PointingHandCursor)
+        self.reg_btn.setFixedWidth(int(50 * UI_SCALE_FACTOR))
+        self.reg_btn.clicked.connect(self.handle_reg_send)
+        custom_layout.addWidget(self.lbl_raw_title)
+        custom_layout.addWidget(self.reg_input)
+        custom_layout.addWidget(self.reg_btn)
 
-        btn_plus = QPushButton("+")
-        btn_plus.clicked.connect(self.increase_echo_thr)
+        reg_layout.addLayout(echo_layout)
+        reg_layout.addLayout(custom_layout)
+        scroll_layout.addWidget(reg_group)
+        scroll_layout.addStretch()
+        scroll.setWidget(scroll_content)
+        main_layout.addWidget(scroll)
 
-        btn_send = QPushButton("Send")
-        btn_send.clicked.connect(self.send_echo_thr_cmd)
-
-        row = QHBoxLayout()
-        row.addWidget(QLabel("Echo Thr:"))
-        row.addWidget(btn_minus)
-        row.addWidget(self.lbl_echo_val)
-        row.addWidget(btn_plus)
-        row.addStretch()
-        row.addWidget(btn_send)
-
-        layout.addLayout(row)
-        return group
-
-    def _build_button_bar(self):
-        layout = QHBoxLayout()
+        btn_layout = QHBoxLayout()
+        btn_layout.setContentsMargins(5, 0, 5, 5)
         apply_btn = QPushButton("Apply")
         apply_btn.setObjectName("applyBtn")
         apply_btn.clicked.connect(self.handle_apply)
-
         cancel_btn = QPushButton("Cancel")
         cancel_btn.clicked.connect(self.close)
-
-        layout.addStretch()
-        layout.addWidget(apply_btn)
-        layout.addWidget(cancel_btn)
-
-        return layout
+        btn_layout.addStretch()
+        btn_layout.addWidget(apply_btn)
+        btn_layout.addWidget(cancel_btn)
+        main_layout.addLayout(btn_layout)
 
     def decrease_echo_thr(self):
         if self.echo_thr_val > 1:
