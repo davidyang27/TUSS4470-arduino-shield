@@ -37,7 +37,7 @@ const int analogIn = A0;
 struct __attribute__((packed)) Header {
   uint8_t  start = 0xAA;
   uint16_t depth_index;            
-  int16_t  temp_scaled;     
+  int16_t  drive_frequency; // [修正] 改名為 drive_frequency
   uint16_t vDrv_scaled;
   uint16_t num_samples; 
 };
@@ -249,7 +249,8 @@ void loop()
       
       // [關鍵修改] 僅更新 Arduino 計數器
       if (cycles > 0) {
-          if (cycles > 64) cycles = 64; 
+          // [同步修正] 將上限放寬到 128，以配合 Python
+          if (cycles > 128) cycles = 128; 
           targetToggleCount = cycles * 2;
       }
       
@@ -262,14 +263,16 @@ void loop()
 
 void sendData() {
   header.depth_index = depthDetectSample;
-  header.temp_scaled = (int16_t)(DRIVE_FREQUENCY / 1000); 
+  // [修正] 改名為 drive_frequency
+  header.drive_frequency = (int16_t)(DRIVE_FREQUENCY / 1000); 
   header.num_samples = currentNumSamples; 
   
   uint8_t cs = 0;
   cs ^= (uint8_t)(header.depth_index & 0xFF);
   cs ^= (uint8_t)(header.depth_index >> 8);
-  cs ^= (uint8_t)(header.temp_scaled & 0xFF);
-  cs ^= (uint8_t)(header.temp_scaled >> 8);
+  // [修正] Checksum 計算也同步更名
+  cs ^= (uint8_t)(header.drive_frequency & 0xFF);
+  cs ^= (uint8_t)(header.drive_frequency >> 8);
   cs ^= (uint8_t)(header.vDrv_scaled & 0xFF);
   cs ^= (uint8_t)(header.vDrv_scaled >> 8);
   cs ^= (uint8_t)(header.num_samples & 0xFF); 
@@ -281,7 +284,8 @@ void sendData() {
   
   Serial.write(header.start);
   Serial.write((uint8_t*)&header.depth_index, 2);
-  Serial.write((uint8_t*)&header.temp_scaled, 2);
+  // [修正] 傳送時也同步更名
+  Serial.write((uint8_t*)&header.drive_frequency, 2);
   Serial.write((uint8_t*)&header.vDrv_scaled, 2);
   Serial.write((uint8_t*)&header.num_samples, 2);
   
