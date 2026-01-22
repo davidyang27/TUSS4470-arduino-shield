@@ -14,10 +14,10 @@ try:
     from PyQt5.QtWidgets import (
         QApplication, QMainWindow, QVBoxLayout, QWidget, QComboBox, 
         QPushButton, QLabel, QLineEdit, QHBoxLayout, QCheckBox, 
-        QDialog, QFormLayout, QFrame, QSizePolicy, QGroupBox, QScrollArea, QMessageBox, QFileDialog
+        QDialog, QFormLayout, QFrame, QSizePolicy, QGroupBox, QScrollArea, QFileDialog
     )
-    from PyQt5.QtCore import QThread, pyqtSignal, Qt, QSize, QRectF, QPoint, QTimer
-    from PyQt5.QtGui import QPalette, QColor, QFont, QPainter, QPen, QBrush
+    from PyQt5.QtCore import QThread, pyqtSignal, Qt, QRectF, QPoint, QTimer
+    from PyQt5.QtGui import QColor, QFont, QPainter, QPen
     import pyqtgraph as pg
 except ImportError as e:
     print(f"CRITICAL ERROR: Missing libraries. {e}")
@@ -95,14 +95,16 @@ def read_packet(ser):
     if ser.in_waiting == 0: return None
     
     header_bytes = ser.read(9)
-    if len(header_bytes) != 9: return None
+    if len(header_bytes) != 9:
+        return None
     if header_bytes[0] != 0xAA: 
         ser.read(ser.in_waiting) 
         return None 
     
     try:
         start, depth, freq_scaled, vDrv_scaled, num_samples = struct.unpack("<BHhHH", header_bytes)
-    except: return None
+    except struck.error:
+        return None
 
     if num_samples > 20000 or num_samples < 10:
         ser.read(ser.in_waiting)
@@ -331,10 +333,13 @@ class SerialReader(QThread):
                 while self.running:
                     try:
                         while not self.send_queue.empty(): cmd = self.send_queue.get_nowait(); ser.write(cmd)
-                    except: pass
+                    except Exception as e:
+                        print(f"Serial Write Error: {e}")
                     result = read_packet(ser)
-                    if result: self.packet_received.emit(result)
-                    else: time.sleep(0.001) 
+                    if result:
+                        self.packet_received.emit(result)
+                    else:
+                        time.sleep(0.001) 
         except Exception as e: print(f"Serial Error: {e}")
 
 class UDPReader(QThread):
@@ -751,8 +756,6 @@ class WaterfallApp(QMainWindow):
         if y + popup.height() > screen_geo.bottom(): y = screen_geo.bottom() - popup.height() - 5
         if y < screen_geo.top(): y = screen_geo.top() + 5
         popup.move(x, y); popup.show()
-
-    def set_gradient(self, n): self.current_gradient = n; self.colorbar.item.gradient.loadPreset(n)
     
     def set_range_step(self, val):
         total_depth = val * 4.0
@@ -833,11 +836,11 @@ class WaterfallApp(QMainWindow):
         
         if len(raw_data) != self.current_max_samples:
             if abs(len(raw_data) - self.current_max_samples) > 0:
-                 self.current_max_samples = len(raw_data)
-                 self.data = np.zeros((MAX_ROWS, self.current_max_samples))
-                 self.tvg_curve = np.linspace(1.0, TVG_STRENGTH, self.current_max_samples)
-                 self.depth_history = np.full(MAX_ROWS, np.nan)
-                 self.depth_line.setData(x=np.arange(MAX_ROWS), y=self.depth_history, connect="finite")
+                self.current_max_samples = len(raw_data)
+                self.data = np.zeros((MAX_ROWS, self.current_max_samples))
+                self.tvg_curve = np.linspace(1.0, TVG_STRENGTH, self.current_max_samples)
+                self.depth_history = np.full(MAX_ROWS, np.nan)
+                self.depth_line.setData(x=np.arange(MAX_ROWS), y=self.depth_history, connect="finite")
 
         filtered = sonar_display_pipeline_optimized(raw_data, self.tvg_curve)
         
