@@ -1,3 +1,4 @@
+# stdlib
 import sys
 import struct
 import time
@@ -6,31 +7,39 @@ import queue
 import os
 import datetime
 
+# third-party
 import numpy as np
 import serial
 import serial.tools.list_ports
-from PyQt5.QtWidgets import (
-    QApplication,
-    QMainWindow,
-    QVBoxLayout,
-    QWidget,
-    QComboBox,
-    QPushButton,
-    QLabel,
-    QLineEdit,
-    QHBoxLayout,
-    QCheckBox,
-    QDialog,
-    QFormLayout,
-    QFrame,
-    QSizePolicy,
-    QGroupBox,
-    QScrollArea,
-    QFileDialog,
-)
-from PyQt5.QtCore import QThread, pyqtSignal, Qt, QRectF, QPoint, QTimer
-from PyQt5.QtGui import QColor, QFont, QPainter, QPen
-import pyqtgraph as pg
+
+
+# 嘗試匯入 PyQt5，失敗則提示
+try:
+    from PyQt5.QtWidgets import (
+        QApplication,
+        QMainWindow,
+        QVBoxLayout,
+        QWidget,
+        QComboBox,
+        QPushButton,
+        QLabel,
+        QLineEdit,
+        QHBoxLayout,
+        QCheckBox,
+        QDialog,
+        QFormLayout,
+        QFrame,
+        QSizePolicy,
+        QGroupBox,
+        QScrollArea,
+        QFileDialog,
+    )
+    from PyQt5.QtCore import QThread, pyqtSignal, Qt, QRectF, QPoint, QTimer
+    from PyQt5.QtGui import QColor, QFont, QPainter, QPen
+    import pyqtgraph as pg
+except ImportError as e:
+    print(f"CRITICAL ERROR: Missing libraries. {e}")
+    sys.exit(1)
 
 # ============================================================
 # --- 全域配置參數 ---
@@ -126,7 +135,10 @@ def read_packet(ser):
         return None
 
     try:
-        _, depth, freq_scaled, vDrv_scaled, num_samples = struct.unpack(
+        # [修改] 這裡的解包順序對應 Arduino Header 結構
+        # Arduino: start(1), depth(2), drive_freq(2), vDrv(2), num_samples(2)
+        # 格式 <BHhHH: Byte, UShort, Short, UShort, UShort
+        _, depth, drive_freq, v_drv_scaled, num_samples = struct.unpack(
             "<BHhHH", header_bytes
         )
     except struct.error:
@@ -154,7 +166,8 @@ def read_packet(ser):
         return None
 
     values = np.frombuffer(payload, dtype=np.uint8, count=num_samples)
-    return values, min(depth, num_samples), freq_scaled, float(vDrv_scaled)
+    # 回傳: Raw Data, 深度索引, 驅動頻率, 閾值索引
+    return values, min(depth, num_samples), drive_freq, float(v_drv_scaled)
 
 
 def get_serial_ports():
@@ -215,7 +228,7 @@ class DataRecorder(QThread):
             self.file_handle = None
         print("[Recorder] Stopped.")
 
-    def add_data(self, raw_data, depth_idx, freq, speed_of_sound, delay_us, cycles):
+    def add_data(self, raw_data, depth_idx, drive_freq, speed_of_sound, delay_us, cycles):
         if self.running:
             # 將所有參數打包放入 Queue
             self.queue.put(
@@ -223,7 +236,7 @@ class DataRecorder(QThread):
                     time.time(),
                     raw_data,
                     depth_idx,
-                    freq,
+                    drive_freq, # [新增] 加入頻率
                     speed_of_sound,
                     delay_us,
                     cycles,
@@ -241,32 +254,36 @@ class DataRecorder(QThread):
             ts, raw_data, depth_idx, freq, sos, delay, cyc = item
 
             # --- 自訂二進位格式 (Big Endian 或 Little Endian 統一即可) ---
-            # 1. Magic Header (2 bytes): 0xFE, 0xFE (用來分隔 Frame)
+            # [更新] Header 格式 (共 26 bytes)
+            # 1. Magic Header (2 bytes): 0xFE, 0xFE
             # 2. Timestamp (8 bytes, double)
             # 3. Depth Index (2 bytes, ushort)
-            # 4. Speed Of Sound (4 bytes, float)
-            # 5. Delay US (4 bytes, float)
-            # 6. Cycles (2 bytes, ushort)
-            # 7. Data Length (2 bytes, ushort)
-            # 8. Raw Data (N bytes)
+            # 4. Drive Freq (2 bytes, short) - [新增]
+            # 5. Speed Of Sound (4 bytes, float)
+            # 6. Delay US (4 bytes, float)
+            # 7. Cycles (2 bytes, ushort)
+            # 8. Data Length (2 bytes, ushort)
+            # 9. Raw Data (N bytes)
 
             try:
                 data_len = len(raw_data)
-                # Header struct: <2s d H f f H H (Little Endian)
+                # Header struct: <2s d H h f f H H (Little Endian)
+                # 注意: freq 是 int16 所以用 'h'
                 header = struct.pack(
-                    "<2s d H f f H H",
-                    b"\xfe\xfe",  # Magic
-                    ts,  # Timestamp
-                    int(depth_idx),
-                    float(sos),
-                    float(delay),
-                    int(cyc),
-                    data_len,
+                    "<2s d H h f f H H",
+                    b"\xfe\xfe",  # Magic (2)
+                    ts,           # Timestamp (8)
+                    int(depth_idx), # Depth (2)
+                    int(freq),      # Drive Freq (2) - [新增]
+                    float(sos),     # SOS (4)
+                    float(delay),   # Delay (4)
+                    int(cyc),       # Cycles (2)
+                    data_len,       # Len (2)
                 )
 
                 self.file_handle.write(header)
                 self.file_handle.write(raw_data.tobytes())
-                self.file_handle.flush()  # 確保寫入磁碟 (防止斷電資料遺失)
+                self.file_handle.flush()  # 確保寫入磁碟
             except Exception as e:
                 print(f"[Recorder] Write Error: {e}")
 
@@ -306,7 +323,7 @@ class ColorPopup(BasePopup):
                     btn.setProperty("active", True)
                 btn.clicked.connect(lambda checked, n=name: self.handle_click(n))
                 layout.addWidget(btn)
-            except:
+            except Exception:
                 continue
 
         self.setFixedWidth(int(140 * UI_SCALE_FACTOR))
@@ -327,7 +344,7 @@ class RangePopup(BasePopup):
         try:
             total_depth_m = (parent.current_zoom_samples * SAMPLE_RESOLUTION) / 100.0
             current_step_approx = total_depth_m / 4.0
-        except:
+        except Exception:
             current_step_approx = 0
         for val in options:
             if val < 1.0:
@@ -476,7 +493,7 @@ class UDPReader(QThread):
                 try:
                     data, _ = sock.recvfrom(65536)
                     pass
-                except:
+                except Exception:
                     continue
         finally:
             sock.close()
@@ -911,7 +928,7 @@ class WaterfallApp(QMainWindow):
         self.colorbar.setImageItem(self.imageitem)
         try:
             self.colorbar.item.gradient.loadPreset(self.current_gradient)
-        except:
+        except Exception:
             pass
 
         sidebar = QFrame()
@@ -1052,6 +1069,16 @@ class WaterfallApp(QMainWindow):
             self.serial_thread.send_raw_command(cmd)
         self.update_zoom_range()
 
+    def set_sound_speed(self, speed):
+        global SPEED_OF_SOUND, SAMPLE_RESOLUTION
+        SPEED_OF_SOUND = self.current_speed = speed
+        SAMPLE_RESOLUTION = (SPEED_OF_SOUND * SAMPLE_TIME * 100) / 2
+
+        ax = self.waterfall.getAxis("right")
+        ax.setTickFont(QFont("Arial", AXIS_FONT_SIZE))
+
+        self.update_zoom_range()
+
     def show_color_menu(self):
         popup = ColorPopup(self.current_gradient, self)
         popup.itemSelected.connect(self.set_gradient)
@@ -1147,9 +1174,7 @@ class WaterfallApp(QMainWindow):
     def update_zoom_range(self):
         pad_top = self.current_zoom_samples * 0.02
         pad_bottom = self.current_zoom_samples * 0.02
-        self.waterfall.setYRange(
-            -pad_top, self.current_zoom_samples + pad_bottom
-        )
+        self.waterfall.setYRange(-pad_top, self.current_zoom_samples + pad_bottom)
         overlay_pos = self.current_zoom_samples - (self.current_zoom_samples * 0.05)
         self.depth_overlay.setPos(10, overlay_pos)
 
@@ -1170,7 +1195,7 @@ class WaterfallApp(QMainWindow):
         for item in self.waterfall.items():
             if isinstance(item, pg.InfiniteLine) and item != self.depth_line:
                 self.waterfall.removeItem(item)
-        for idx, label in ticks:
+        for idx, _ in ticks:
             if idx > 0:
                 line = pg.InfiniteLine(
                     pos=idx,
@@ -1191,7 +1216,7 @@ class WaterfallApp(QMainWindow):
 
         # [新增] 傳遞給錄製器
         if self.recorder.running:
-            raw, depth, freq, vdrv = packet
+            raw, depth, freq, _ = packet
             self.recorder.add_data(
                 raw,
                 depth,
@@ -1259,16 +1284,6 @@ class WaterfallApp(QMainWindow):
         self.lbl_footer_depth.setText(f"Depth: {depth_m * 100:.0f} cm")
         self.lbl_footer_ovr.setText(f"Override: {ovr_m * 100:.0f} cm")
         self.latest_frame_data = None
-
-    def set_sound_speed(self, speed):
-        global SPEED_OF_SOUND, SAMPLE_RESOLUTION
-        SPEED_OF_SOUND = self.current_speed = speed
-        SAMPLE_RESOLUTION = (SPEED_OF_SOUND * SAMPLE_TIME * 100) / 2
-
-        ax = self.waterfall.getAxis("right")
-        ax.setTickFont(QFont("Arial", AXIS_FONT_SIZE))
-
-        self.update_zoom_range()
 
     # [新增] 處理錄製開關
     def toggle_recording(self):
@@ -1389,7 +1404,7 @@ class WaterfallApp(QMainWindow):
                     self.udp_thread = UDPReader(self.udp_port_num)
                     self.udp_thread.data_received.connect(self.waterfall_plot_callback)
                     self.udp_thread.start()
-                except:
+                except Exception:
                     return
             self.is_connected = True
             self.btn_connect.setText("Stop")
