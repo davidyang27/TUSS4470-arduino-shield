@@ -40,12 +40,18 @@ except ImportError as e:
     print(f"CRITICAL ERROR: Missing libraries. {e}")
     sys.exit(1)
 
+# [新增] 引入系統監控套件
+try:
+    import psutil
+except ImportError:
+    psutil = None  # 如果沒安裝，避免程式崩潰
+
 # ============================================================
 # --- 全域配置參數 ---
 # ============================================================
 
 # [關鍵設定] 介面縮放比例
-UI_SCALE_FACTOR = 1.5
+UI_SCALE_FACTOR = 1.73
 
 AIR_SPEED = 343.0
 WATER_SPEED = 1500.0
@@ -539,6 +545,16 @@ class SettingsDialog(QDialog):
             QPushButton#applyBtn {{ background-color: #0078d7; border-color: #005a9e; }}
             QPushButton#applyBtn:hover {{ background-color: #006cbd; }}
             
+            /* [新增] Quit 按鈕專用樣式 (紅色警戒) */
+            QPushButton#quitBtn {{ 
+                background-color: #aa0000; 
+                border: 1px solid #ff3333; 
+                color: white; 
+            }}
+            QPushButton#quitBtn:hover {{ 
+                background-color: #cc0000; 
+            }}
+
             /* [修改] GroupBox 緊湊化設計 */
             QGroupBox {{ 
                 border: 1px solid #444; 
@@ -788,12 +804,23 @@ class SettingsDialog(QDialog):
         reg_layout.addRow(l_raw, raw_container)
 
         scroll_layout.addWidget(reg_group)
-        scroll_layout.addStretch() # 推頂
+        
+        # [修改] 這裡加入一個大一點的 spacer，把 Quit 按鈕推到底部
+        scroll_layout.addStretch(1) 
+        
+        # [新增] Quit Button 
+        quit_btn = QPushButton("QUIT APPLICATION")
+        quit_btn.setObjectName("quitBtn") # 設定 ID 以便 CSS 上色
+        quit_btn.setCursor(Qt.PointingHandCursor)
+        quit_btn.setFixedHeight(int(35 * UI_SCALE_FACTOR))
+        # 點擊後執行主程式的 close() 來關閉整個應用程式
+        quit_btn.clicked.connect(self.handle_quit_app)
+        scroll_layout.addWidget(quit_btn)
         
         scroll.setWidget(scroll_content)
         main_layout.addWidget(scroll)
 
-        # Bottom Buttons
+        # Bottom Buttons (Apply / Cancel)
         btn_layout = QHBoxLayout()
         btn_layout.setContentsMargins(5, 5, 5, 5)
         apply_btn = QPushButton("Apply")
@@ -886,6 +913,11 @@ class SettingsDialog(QDialog):
         )
         self.main_app.configure_nmea_output(self.nmea_checkbox.isChecked(), port)
         self.close()
+
+    def handle_quit_app(self):
+        """Close the settings dialog AND the main application."""
+        self.close() # Close settings window
+        self.main_app.close() # Close main waterfall window (triggering app exit)
 
 
 # --- 主應用程式 ---
@@ -1009,15 +1041,45 @@ class WaterfallApp(QMainWindow):
         footer_frame.setObjectName("footerFrame")
         footer_layout = QHBoxLayout(footer_frame)
         footer_layout.setContentsMargins(5, 2, 5, 2)
+
+        # 左邊：深度資訊
         self.lbl_footer_depth = QLabel("Depth: ---")
-        self.lbl_footer_depth.setObjectName("footerLabel")
+        self.lbl_footer_depth.setObjectName("footerLabel") # 吃原本的設定
         self.lbl_footer_ovr = QLabel("Override: ---")
-        self.lbl_footer_ovr.setObjectName("footerLabel")
-        footer_layout.addWidget(self.lbl_footer_depth)
-        footer_layout.addWidget(self.lbl_footer_ovr)
-        footer_layout.addStretch()
+        self.lbl_footer_ovr.setObjectName("footerLabel")   # 吃原本的設定
+
+        # [修改] 右邊：系統狀態
+        # 全部都設定 objectName 為 "footerLabel"
+        # 這樣它們就會跟 Depth 一模一樣 (顏色 #aaa, 沒背景)
+        
+        self.lbl_cpu = QLabel("CPU: --%")
+        self.lbl_cpu.setObjectName("footerLabel") 
+
+        self.lbl_temp = QLabel("Temp: --°C")
+        self.lbl_temp.setObjectName("footerLabel")
+
+        self.lbl_ram = QLabel("RAM: --%")
+        self.lbl_ram.setObjectName("footerLabel")
+
+        # [排版]
+        footer_layout.addWidget(self.lbl_footer_depth) # 左 1
+        footer_layout.addWidget(self.lbl_footer_ovr)   # 左 2
+
+        footer_layout.addStretch()  # [彈簧] 推到最右邊
+
+        footer_layout.addWidget(self.lbl_cpu)  # 右 1
+        footer_layout.addWidget(self.lbl_temp) # 右 2
+        footer_layout.addWidget(self.lbl_ram)  # 右 3
+
         left_layout.addWidget(footer_frame)
         main_layout.addWidget(left_container, stretch=1)
+
+
+        # [新增] 啟動一個獨立的 Timer，每秒更新一次系統狀態 (不要跟繪圖 Timer 混在一起)
+        self.stat_timer = QTimer()
+        self.stat_timer.setInterval(1000) # 1000ms = 1秒
+        self.stat_timer.timeout.connect(self.update_system_stats)
+        self.stat_timer.start()
 
         self.colorbar = pg.HistogramLUTWidget()
         self.colorbar.setImageItem(self.imageitem)
@@ -1382,6 +1444,37 @@ class WaterfallApp(QMainWindow):
         self.lbl_footer_ovr.setText(f"Override: {ovr_m * 100:.0f} cm")
         self.latest_frame_data = None
 
+    def update_system_stats(self):
+        if psutil is None:
+            return
+
+        cpu_usage = psutil.cpu_percent(interval=None)
+        ram_usage = psutil.virtual_memory().percent
+        
+        temp = 0.0
+        try:
+            with open("/sys/class/thermal/thermal_zone0/temp", "r") as f:
+                temp_milli = int(f.read())
+                temp = temp_milli / 1000.0
+        except FileNotFoundError:
+            temp = 0.0 
+        
+        # 更新文字
+        self.lbl_cpu.setText(f"CPU: {cpu_usage:.1f}%")
+        self.lbl_ram.setText(f"RAM: {ram_usage:.1f}%")
+        self.lbl_temp.setText(f"Temp: {temp:.1f}°C")
+
+        # [修改] 顏色控制邏輯
+        if temp > 75:
+            # 警告狀態：強制變紅且加粗 (會暫時覆蓋原本的 footerLabel 設定)
+            # 這裡必須重新指定 font-size，以免覆蓋後字變小
+            f_size = int(10 * UI_SCALE_FACTOR)
+            self.lbl_temp.setStyleSheet(f"color: #ff5555; font-weight: bold; font-size: {f_size}px;")
+        else:
+            # 正常狀態：清空樣式表
+            # 這樣它就會自動變回 "footerLabel" 定義的樣子 (#aaa)
+            self.lbl_temp.setStyleSheet("")
+
     # [新增] 處理錄製開關
     def toggle_recording(self):
         if not self.recorder.running:
@@ -1532,5 +1625,5 @@ if __name__ == "__main__":
     font.setPointSize(10)
     app.setFont(font)
     window = WaterfallApp()
-    window.show()
+    window.showFullScreen()
     sys.exit(app.exec())
