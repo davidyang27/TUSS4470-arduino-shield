@@ -1,0 +1,30 @@
+選項二：安裝專用工具 cpufrequtils (現代 Linux 標準作法，推薦)
+這是目前 Raspberry Pi 官方比較推薦的方式，比較正規。
+
+安裝工具：
+
+Bash
+
+sudo apt update
+sudo apt install cpufrequtils
+建立設定檔： 安裝後，編輯設定檔（如果檔案是空的也沒關係，直接填入）：
+
+Bash
+
+sudo nano /etc/default/cpufrequtils
+填入以下內容：
+
+Bash
+
+GOVERNOR="performance"
+重啟服務或重開機：
+
+Bash
+
+sudo systemctl restart cpufrequtils
+驗證方法： 設定完後，您可以輸入以下指令檢查目前模式：
+
+Bash
+
+cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor
+如果顯示 performance，就代表成功了！
