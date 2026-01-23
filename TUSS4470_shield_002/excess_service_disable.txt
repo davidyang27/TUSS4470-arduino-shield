@@ -1,0 +1,25 @@
+# 1. 停止干擾 Serial 的服務 (最重要)
+sudo systemctl stop ModemManager
+sudo systemctl disable ModemManager
+
+# 2. 停止印表機
+sudo systemctl stop cups
+sudo systemctl disable cups
+sudo systemctl stop cups-browsed
+sudo systemctl disable cups-browsed
+
+# 3. 停止藍芽
+sudo systemctl stop bluetooth
+sudo systemctl disable bluetooth
+sudo systemctl stop hciuart
+sudo systemctl disable hciuart
+
+# 4. 停止 mDNS (如果不依賴 raspberrypi.local 連線)
+sudo systemctl stop avahi-daemon
+sudo systemctl disable avahi-daemon
+
+# 5. 停止熱鍵服務
+sudo systemctl stop triggerhappy
+sudo systemctl disable triggerhappy
+
+echo "所有不必要的服務已關閉，建議重開機以確保系統乾淨運行。"
