@@ -22,4 +22,15 @@ sudo systemctl disable avahi-daemon
 sudo systemctl stop triggerhappy
 sudo systemctl disable triggerhappy
 
+sudo systemctl stop unattended-upgrades
+sudo systemctl disable unattended-upgrades
+sudo systemctl stop apt-daily.timer
+sudo systemctl disable apt-daily.timer
+sudo systemctl stop apt-daily-upgrade.timer
+sudo systemctl disable apt-daily-upgrade.timer
+
+# 停止使用者層級的音效服務
+systemctl --user stop pipewire pipewire-pulse wireplumber
+systemctl --user disable pipewire pipewire-pulse wireplumber
+
 echo "所有不必要的服務已關閉，建議重開機以確保系統乾淨運行。"
