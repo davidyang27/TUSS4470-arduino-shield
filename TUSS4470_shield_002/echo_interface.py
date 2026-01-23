@@ -486,45 +486,111 @@ class SettingsDialog(QDialog):
         super().__init__(parent)
         self.main_app = parent
         self.setWindowTitle("Config")
-        self.resize(int(320 * UI_SCALE_FACTOR), int(580 * UI_SCALE_FACTOR))
+        # 調整視窗大小，高度稍微縮小因為我們要把間距變緊湊
+        self.resize(int(340 * UI_SCALE_FACTOR), int(600 * UI_SCALE_FACTOR))
         self.echo_thr_val = self.main_app.saved_echo_thr
 
         lbl_size = int(11 * UI_SCALE_FACTOR)
+        
+        # [關鍵] 設定統一的標籤寬度，確保所有區塊的輸入框左邊切齊
+        fixed_label_width = int(70 * UI_SCALE_FACTOR) 
 
         self.setStyleSheet(
             f"""
             QDialog {{ background-color: #2b2b2b; color: #e0e0e0; font-family: 'Malgun Gothic', Arial; }}
-            QLabel {{ color: #e0e0e0; font-weight: bold; font-size: {lbl_size}px; }}
-            QComboBox, QLineEdit {{ background-color: #3a3a3a; border: 1px solid #555; color: white; padding: 3px; border-radius: 2px; font-size: {lbl_size}px; min-height: {int(18 * UI_SCALE_FACTOR)}px; }}
+            
+            /* 通用標籤樣式 (設定固定寬度以達成對齊) */
+            QLabel {{ 
+                color: #e0e0e0; 
+                font-weight: bold; 
+                font-size: {lbl_size}px; 
+            }}
+            
+            /* 針對 GroupBox 內的第一欄 Label 強制固定寬度 */
+            QGroupBox QLabel#fieldLabel {{
+                min-width: {fixed_label_width}px;
+                max-width: {fixed_label_width}px;
+            }}
+            
+            /* Checkbox 樣式 */
+            QCheckBox {{
+                font-size: {lbl_size}px; 
+                color: #e0e0e0;
+                font-weight: bold;
+                spacing: 5px;
+            }}
+
+            /* 輸入框與下拉選單樣式 */
+            QComboBox, QLineEdit {{ 
+                background-color: #3a3a3a; 
+                border: 1px solid #555; 
+                color: white; 
+                padding: 2px 4px; 
+                border-radius: 2px; 
+                font-size: {lbl_size}px; 
+                min-height: {int(20 * UI_SCALE_FACTOR)}px; 
+            }}
             QComboBox::drop-down {{ subcontrol-origin: padding; subcontrol-position: top right; width: {int(20 * UI_SCALE_FACTOR)}px; border-left: 1px solid #555; background-color: #444; }}
             QComboBox::down-arrow {{ width: 0px; height: 0px; border-left: 4px solid transparent; border-right: 4px solid transparent; border-top: 5px solid #ffffff; margin-top: 1px; margin-right: 1px; }}
-            QPushButton {{ background-color: #444; border: 1px solid #666; color: white; padding: 6px; border-radius: 3px; font-weight: bold; font-size: {SETTINGS_FONT_SIZE}px; }}
+            
+            /* 按鈕樣式 */
+            QPushButton {{ background-color: #444; border: 1px solid #666; color: white; padding: 4px 8px; border-radius: 3px; font-weight: bold; font-size: {SETTINGS_FONT_SIZE}px; }}
             QPushButton:hover {{ background-color: #555; border-color: #777; }}
             QPushButton#applyBtn {{ background-color: #0078d7; border-color: #005a9e; }}
             QPushButton#applyBtn:hover {{ background-color: #006cbd; }}
-            QGroupBox {{ border: 1px solid #555; border-radius: 4px; margin-top: 10px; padding-top: 5px; font-weight: bold; font-size: {SETTINGS_FONT_SIZE}px; }}
-            QGroupBox::title {{ subcontrol-origin: margin; subcontrol-position: top left; left: 7px; padding: 0 2px; background-color: #2b2b2b; color: #00b4ff; }}
+            
+            /* [修改] GroupBox 緊湊化設計 */
+            QGroupBox {{ 
+                border: 1px solid #444; 
+                border-radius: 4px; 
+                margin-top: {int(8 * UI_SCALE_FACTOR)}px; /* 標題空間 */
+                padding-top: {int(12 * UI_SCALE_FACTOR)}px; /* 內部上方留白縮小 */
+                padding-bottom: 8px;
+                padding-left: 8px;
+                padding-right: 8px;
+                font-weight: bold; 
+                font-size: {SETTINGS_FONT_SIZE}px; 
+            }}
+            
+            /* [修改] 標題透明化且位置微調 */
+            QGroupBox::title {{ 
+                subcontrol-origin: margin; 
+                subcontrol-position: top left; 
+                left: 8px; 
+                padding: 0 3px; 
+                background-color: transparent; 
+                color: #00b4ff; 
+            }}
+            
             QScrollArea {{ border: none; background-color: transparent; }}
             QWidget#scrollContent {{ background-color: transparent; }}
         """
         )
 
         main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(2, 2, 2, 2)
-        main_layout.setSpacing(2)
+        main_layout.setContentsMargins(5, 5, 5, 5)
+        main_layout.setSpacing(5)
+        
+        # 使用 ScrollArea 防止小螢幕顯示不全
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll_content = QWidget()
         scroll_content.setObjectName("scrollContent")
+        
+        # 這裡改用 QVBoxLayout 管理所有 GroupBox
         scroll_layout = QVBoxLayout(scroll_content)
-        scroll_layout.setSpacing(int(8 * UI_SCALE_FACTOR))
-        scroll_layout.setContentsMargins(5, 5, 5, 5)
+        scroll_layout.setSpacing(int(8 * UI_SCALE_FACTOR)) # Block 之間的距離縮小
+        scroll_layout.setContentsMargins(2, 2, 2, 2)
 
-        # 1. Connection Group (Simplified - Only Serial)
+        # ==========================================
+        # 1. Connection Group
+        # ==========================================
         conn_group = QGroupBox("CONNECTION")
+        # 使用 GridLayout 來確保對齊
         conn_layout = QFormLayout(conn_group)
-        conn_layout.setContentsMargins(8, 8, 8, 8)
-        conn_layout.setVerticalSpacing(int(6 * UI_SCALE_FACTOR))
+        conn_layout.setContentsMargins(5, 5, 5, 5)
+        conn_layout.setVerticalSpacing(int(5 * UI_SCALE_FACTOR)) # 行距縮小
+        conn_layout.setLabelAlignment(Qt.AlignLeft)
         
         self.serial_combo = QComboBox()
         self.serial_combo.addItems(get_serial_ports())
@@ -537,16 +603,24 @@ class SettingsDialog(QDialog):
         if index >= 0:
             self.res_combo.setCurrentIndex(index)
 
-        conn_layout.addRow("Port:", self.serial_combo)
-        conn_layout.addRow("Samples:", self.res_combo)
+        # 加入帶有 objectName="fieldLabel" 的 Label 以便 CSS 對齊
+        l1 = QLabel("Port:")
+        l1.setObjectName("fieldLabel")
+        conn_layout.addRow(l1, self.serial_combo)
+        
+        l2 = QLabel("Samples:")
+        l2.setObjectName("fieldLabel")
+        conn_layout.addRow(l2, self.res_combo)
 
         scroll_layout.addWidget(conn_group)
 
+        # ==========================================
         # 2. SONAR Group
+        # ==========================================
         sonar_group = QGroupBox("SONAR")
         sonar_layout = QFormLayout(sonar_group)
-        sonar_layout.setContentsMargins(8, 8, 8, 8)
-        sonar_layout.setVerticalSpacing(int(6 * UI_SCALE_FACTOR))
+        sonar_layout.setContentsMargins(5, 5, 5, 5)
+        sonar_layout.setVerticalSpacing(int(5 * UI_SCALE_FACTOR))
 
         self.speed_dropdown = QComboBox()
         self.speed_dropdown.addItems(
@@ -569,18 +643,31 @@ class SettingsDialog(QDialog):
         self.cycles_combo.addItems(CYCLES_OPTIONS)
         self.cycles_combo.setCurrentText(str(self.main_app.current_cycles))
 
-        sonar_layout.addRow("Env:", self.speed_dropdown)
-        sonar_layout.addRow("Speed:", self.delay_combo)
-        sonar_layout.addRow("Cycles:", self.cycles_combo)
+        l_env = QLabel("Env:")
+        l_env.setObjectName("fieldLabel")
+        sonar_layout.addRow(l_env, self.speed_dropdown)
+        
+        l_speed = QLabel("Speed:")
+        l_speed.setObjectName("fieldLabel")
+        sonar_layout.addRow(l_speed, self.delay_combo)
+        
+        l_cyc = QLabel("Cycles:")
+        l_cyc.setObjectName("fieldLabel")
+        sonar_layout.addRow(l_cyc, self.cycles_combo)
+        
         scroll_layout.addWidget(sonar_group)
 
+        # ==========================================
         # 3. DISPLAY Group
+        # ==========================================
         disp_group = QGroupBox("DISPLAY")
         disp_layout = QFormLayout(disp_group)
-        disp_layout.setContentsMargins(8, 8, 8, 8)
-        disp_layout.setVerticalSpacing(int(6 * UI_SCALE_FACTOR))
+        disp_layout.setContentsMargins(5, 5, 5, 5)
+        disp_layout.setVerticalSpacing(int(5 * UI_SCALE_FACTOR))
+        
         self.large_depth_checkbox = QCheckBox("Show Depth")
         self.large_depth_checkbox.setChecked(self.main_app.large_depth_visible)
+        
         self.overlay_mode_combo = QComboBox()
         self.overlay_mode_combo.addItems(["Auto (Threshold)", "Override (Max)"])
         self.overlay_mode_combo.setCurrentIndex(
@@ -594,76 +681,121 @@ class SettingsDialog(QDialog):
             0 if self.main_app.depth_line_mode == "Auto" else 1
         )
 
+        # Checkbox 行 (跨欄)
         disp_layout.addRow(self.large_depth_checkbox)
-        disp_layout.addRow("Src:", self.overlay_mode_combo)
+        
+        # 帶 Label 的行
+        l_src = QLabel("Src:")
+        l_src.setObjectName("fieldLabel")
+        disp_layout.addRow(l_src, self.overlay_mode_combo)
+        
+        # Checkbox 行 (跨欄)
         disp_layout.addRow(self.show_line_checkbox)
-        disp_layout.addRow("Line:", self.line_mode_combo)
+        
+        # 帶 Label 的行
+        l_line = QLabel("Line:")
+        l_line.setObjectName("fieldLabel")
+        disp_layout.addRow(l_line, self.line_mode_combo)
+        
         scroll_layout.addWidget(disp_group)
 
-        # 4. NMEA
+        # ==========================================
+        # 4. NMEA Group
+        # ==========================================
         nmea_group = QGroupBox("NMEA TCP")
         nmea_layout = QFormLayout(nmea_group)
-        nmea_layout.setContentsMargins(8, 8, 8, 8)
-        nmea_layout.setVerticalSpacing(int(6 * UI_SCALE_FACTOR))
+        nmea_layout.setContentsMargins(5, 5, 5, 5)
+        nmea_layout.setVerticalSpacing(int(5 * UI_SCALE_FACTOR))
+        
         self.nmea_checkbox = QCheckBox("Enable")
         self.nmea_checkbox.setChecked(self.main_app.nmea_output_enabled)
         self.nmea_port_input = QLineEdit(str(self.main_app.nmea_port))
-        nmea_layout.addRow("On:", self.nmea_checkbox)
-        nmea_layout.addRow("Port:", self.nmea_port_input)
+        
+        l_on = QLabel("On:")
+        l_on.setObjectName("fieldLabel")
+        nmea_layout.addRow(l_on, self.nmea_checkbox)
+        
+        l_port = QLabel("Port:")
+        l_port.setObjectName("fieldLabel")
+        nmea_layout.addRow(l_port, self.nmea_port_input)
+        
         scroll_layout.addWidget(nmea_group)
 
-        # 5. Register
+        # ==========================================
+        # 5. REGISTER Group (Layout 重構)
+        # ==========================================
         reg_group = QGroupBox("REGISTER")
-        reg_layout = QVBoxLayout(reg_group)
-        reg_layout.setContentsMargins(8, 15, 8, 8)
-        reg_layout.setSpacing(10)
-        echo_layout = QHBoxLayout()
-        self.lbl_echo_title = QLabel("Echo Thr:")
+        # 改用 GridLayout 來精準控制對齊
+        reg_layout = QFormLayout(reg_group) 
+        reg_layout.setContentsMargins(5, 5, 5, 5)
+        reg_layout.setVerticalSpacing(int(10 * UI_SCALE_FACTOR)) # 按鈕區稍微寬鬆一點
+        
+        # Row 1: Echo Thr 控制項 (包成一個 Widget)
+        echo_container = QWidget()
+        echo_hbox = QHBoxLayout(echo_container)
+        echo_hbox.setContentsMargins(0, 0, 0, 0)
+        echo_hbox.setSpacing(5)
+        
         self.btn_echo_minus = QPushButton("-")
-        self.btn_echo_minus.setFixedSize(
-            int(25 * UI_SCALE_FACTOR), int(20 * UI_SCALE_FACTOR)
-        )
+        self.btn_echo_minus.setFixedSize(int(25 * UI_SCALE_FACTOR), int(20 * UI_SCALE_FACTOR))
         self.btn_echo_minus.clicked.connect(self.decrease_echo_thr)
+        
         self.lbl_echo_val = QLabel(str(self.echo_thr_val))
         self.lbl_echo_val.setAlignment(Qt.AlignCenter)
+        # 數字標籤不需要 min-width，或者是固定小一點
         self.lbl_echo_val.setFixedWidth(int(25 * UI_SCALE_FACTOR))
+        self.lbl_echo_val.setStyleSheet("background-color: transparent; border: none;") # 確保沒邊框
+
         self.btn_echo_plus = QPushButton("+")
-        self.btn_echo_plus.setFixedSize(
-            int(25 * UI_SCALE_FACTOR), int(20 * UI_SCALE_FACTOR)
-        )
+        self.btn_echo_plus.setFixedSize(int(25 * UI_SCALE_FACTOR), int(20 * UI_SCALE_FACTOR))
         self.btn_echo_plus.clicked.connect(self.increase_echo_thr)
+        
         self.btn_echo_send = QPushButton("Send")
         self.btn_echo_send.setCursor(Qt.PointingHandCursor)
         self.btn_echo_send.setFixedWidth(int(50 * UI_SCALE_FACTOR))
         self.btn_echo_send.clicked.connect(self.send_echo_thr_cmd)
-        echo_layout.addWidget(self.lbl_echo_title)
-        echo_layout.addWidget(self.btn_echo_minus)
-        echo_layout.addWidget(self.lbl_echo_val)
-        echo_layout.addWidget(self.btn_echo_plus)
-        echo_layout.addStretch()
-        echo_layout.addWidget(self.btn_echo_send)
+        
+        echo_hbox.addWidget(self.btn_echo_minus)
+        echo_hbox.addWidget(self.lbl_echo_val)
+        echo_hbox.addWidget(self.btn_echo_plus)
+        echo_hbox.addStretch() # 把 Send 按鈕推到最右邊? 或者跟上面切齊? 
+        # 為了跟上面的輸入框右邊對齊，這裡用 addStretch 填補中間
+        echo_hbox.addWidget(self.btn_echo_send)
+        
+        l_thr = QLabel("Echo Thr:")
+        l_thr.setObjectName("fieldLabel")
+        reg_layout.addRow(l_thr, echo_container)
 
-        custom_layout = QHBoxLayout()
-        self.lbl_raw_title = QLabel("Raw Reg:")
+        # Row 2: Raw Reg
+        raw_container = QWidget()
+        raw_hbox = QHBoxLayout(raw_container)
+        raw_hbox.setContentsMargins(0, 0, 0, 0)
+        raw_hbox.setSpacing(5)
+        
         self.reg_input = QLineEdit()
         self.reg_input.setPlaceholderText("Addr, Data")
+        
         self.reg_btn = QPushButton("Send")
         self.reg_btn.setCursor(Qt.PointingHandCursor)
         self.reg_btn.setFixedWidth(int(50 * UI_SCALE_FACTOR))
         self.reg_btn.clicked.connect(self.handle_reg_send)
-        custom_layout.addWidget(self.lbl_raw_title)
-        custom_layout.addWidget(self.reg_input)
-        custom_layout.addWidget(self.reg_btn)
+        
+        raw_hbox.addWidget(self.reg_input)
+        raw_hbox.addWidget(self.reg_btn)
+        
+        l_raw = QLabel("Raw Reg:")
+        l_raw.setObjectName("fieldLabel")
+        reg_layout.addRow(l_raw, raw_container)
 
-        reg_layout.addLayout(echo_layout)
-        reg_layout.addLayout(custom_layout)
         scroll_layout.addWidget(reg_group)
-        scroll_layout.addStretch()
+        scroll_layout.addStretch() # 推頂
+        
         scroll.setWidget(scroll_content)
         main_layout.addWidget(scroll)
 
+        # Bottom Buttons
         btn_layout = QHBoxLayout()
-        btn_layout.setContentsMargins(5, 0, 5, 5)
+        btn_layout.setContentsMargins(5, 5, 5, 5)
         apply_btn = QPushButton("Apply")
         apply_btn.setObjectName("applyBtn")
         apply_btn.clicked.connect(self.handle_apply)
@@ -720,7 +852,6 @@ class SettingsDialog(QDialog):
             print(f"[System] Error: {e}")
 
     def handle_apply(self):
-        # [修改] 移除了 connection_source 和 udp_port 的處理
         self.main_app.serial_port_name = self.serial_combo.currentText()
 
         new_samples = int(self.res_combo.currentText())
