@@ -2,7 +2,6 @@
 import sys
 import struct
 import time
-import socket
 import queue
 import os
 import datetime
@@ -187,17 +186,16 @@ def sonar_display_pipeline_optimized(raw_line, tvg_curve):
         )
         line[mask] = 0
 
-    #for i in range(1, len(line)):
-    #    line[i] = SMOOTH_ALPHA * line[i] + (1 - SMOOTH_ALPHA) * line[i - 1]
-        
-        
-    #line[1:] = (
-     #   SMOOTH_ALPHA * line[1:]
-     #   + (1 - SMOOTH_ALPHA) * line[:-1]
-     #   )
+    # for i in range(1, len(line)):
+    #     line[i] = SMOOTH_ALPHA * line[i] + (1 - SMOOTH_ALPHA) * line[i - 1]
 
-    #if len(tvg_curve) == len(line):
-    #    line *= tvg_curve
+    # line[1:] = (
+    #    SMOOTH_ALPHA * line[1:]
+    #    + (1 - SMOOTH_ALPHA) * line[:-1]
+    #    )
+
+    # if len(tvg_curve) == len(line):
+    #     line *= tvg_curve
 
     return np.clip(line, 0, 255).astype(np.uint8)
 
@@ -482,32 +480,6 @@ class SerialReader(QThread):
             print(f"Serial Error: {e}")
 
 
-class UDPReader(QThread):
-    packet_received = pyqtSignal(object)
-
-    def __init__(self, port):
-        super().__init__()
-        self.port, self.running = port, True
-
-    def stop(self):
-        self.running = False
-        self.wait()
-
-    def run(self):
-        try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            sock.settimeout(1.0)
-            sock.bind(("", self.port))
-            while self.running:
-                try:
-                    data, _ = sock.recvfrom(65536)
-                    pass
-                except Exception:
-                    continue
-        finally:
-            sock.close()
-
-
 # --- SettingsDialog ---
 class SettingsDialog(QDialog):
     def __init__(self, parent):
@@ -548,18 +520,15 @@ class SettingsDialog(QDialog):
         scroll_layout.setSpacing(int(8 * UI_SCALE_FACTOR))
         scroll_layout.setContentsMargins(5, 5, 5, 5)
 
-        # 1. Connection
+        # 1. Connection Group (Simplified - Only Serial)
         conn_group = QGroupBox("CONNECTION")
         conn_layout = QFormLayout(conn_group)
         conn_layout.setContentsMargins(8, 8, 8, 8)
         conn_layout.setVerticalSpacing(int(6 * UI_SCALE_FACTOR))
-        self.source_combo = QComboBox()
-        self.source_combo.addItems(["Serial Port", "UDP Stream"])
-        self.source_combo.setCurrentText(self.main_app.connection_source)
+        
         self.serial_combo = QComboBox()
         self.serial_combo.addItems(get_serial_ports())
         self.serial_combo.setCurrentText(self.main_app.serial_port_name)
-        self.udp_port_input = QLineEdit(str(self.main_app.udp_port_num))
 
         self.res_combo = QComboBox()
         self.res_combo.addItems(["2000", "4000", "8000", "12000", "18000"])
@@ -568,13 +537,9 @@ class SettingsDialog(QDialog):
         if index >= 0:
             self.res_combo.setCurrentIndex(index)
 
-        conn_layout.addRow("Type:", self.source_combo)
         conn_layout.addRow("Port:", self.serial_combo)
-        conn_layout.addRow("UDP:", self.udp_port_input)
         conn_layout.addRow("Samples:", self.res_combo)
 
-        self.source_combo.currentTextChanged.connect(self.update_inputs)
-        self.update_inputs(self.source_combo.currentText())
         scroll_layout.addWidget(conn_group)
 
         # 2. SONAR Group
@@ -736,10 +701,6 @@ class SettingsDialog(QDialog):
         except Exception as e:
             print(f"[System] Error: {e}")
 
-    def update_inputs(self, text):
-        self.serial_combo.setEnabled(text == "Serial Port")
-        self.udp_port_input.setEnabled(text != "Serial Port")
-
     def handle_reg_send(self):
         txt = self.reg_input.text().strip()
         if (
@@ -759,13 +720,8 @@ class SettingsDialog(QDialog):
             print(f"[System] Error: {e}")
 
     def handle_apply(self):
-        self.main_app.connection_source = self.source_combo.currentText()
+        # [修改] 移除了 connection_source 和 udp_port 的處理
         self.main_app.serial_port_name = self.serial_combo.currentText()
-        self.main_app.udp_port_num = (
-            int(self.udp_port_input.text())
-            if self.udp_port_input.text().isdigit()
-            else 5005
-        )
 
         new_samples = int(self.res_combo.currentText())
         if new_samples != self.main_app.current_max_samples:
@@ -809,13 +765,12 @@ class WaterfallApp(QMainWindow):
         self.recorder = DataRecorder()  # [新增] 初始化錄製器
 
         self.serial_thread = None
-        self.udp_thread = None
-        self.connection_source = "Serial Port"
+        
         self.serial_port_name = ""
         ports = get_serial_ports()
         if ports:
             self.serial_port_name = ports[0]
-        self.udp_port_num = 5005
+        
         self.is_connected = False
         self.nmea_output_enabled = False
         self.nmea_port = 10110
@@ -853,14 +808,14 @@ class WaterfallApp(QMainWindow):
             QPushButton.connect_active:hover {{ background-color: #3e4145; }}
             
             /* [新增] 錄製按鈕樣式 (紅色當作 Recording) */
-            QPushButton.record_active {{
-                background-color: #aa0000;
-                border: none;
-                border-bottom: 1px solid #3e4145;
-                color: white;
-                font-size: {SIDEBAR_FONT_SIZE}px;
-                font-weight: bold;
-                padding: 10px;
+            QPushButton.record_active {{ 
+                background-color: #aa0000; 
+                border: none; 
+                border-bottom: 1px solid #3e4145; 
+                color: white; 
+                font-size: {SIDEBAR_FONT_SIZE}px; 
+                font-weight: bold; 
+                padding: 10px; 
             }}
             QPushButton.record_active:hover {{ background-color: #cc0000; }}
 
@@ -937,8 +892,7 @@ class WaterfallApp(QMainWindow):
         self.colorbar.setImageItem(self.imageitem)
         try:
             self.colorbar.item.gradient.loadPreset(self.current_gradient)
-        except Exception as e:
-            print(f"[Error] {e}")
+        except Exception:
             pass
 
         sidebar = QFrame()
@@ -959,16 +913,16 @@ class WaterfallApp(QMainWindow):
         self.btn_plus.setFixedHeight(SIDEBAR_BTN_HEIGHT)
         self.btn_plus.setStyleSheet(
             f"""
-            QPushButton {{
-                background-color: transparent;
-                border: none;
-                border-bottom: 1px solid #3e4145;
-                border-right: 1px solid #3e4145;
-                color: #ccc;
+            QPushButton {{ 
+                background-color: transparent; 
+                border: none; 
+                border-bottom: 1px solid #3e4145; 
+                border-right: 1px solid #3e4145; 
+                color: #ccc; 
                 font-family: 'Malgun Gothic';
-                font-size: {ZOOM_FONT_SIZE}px;
-                font-weight: bold;
-                border-radius: 0px;
+                font-size: {ZOOM_FONT_SIZE}px; 
+                font-weight: bold; 
+                border-radius: 0px; 
             }}
             QPushButton:hover {{ background-color: #3e4145; color: white; }}
             QPushButton:pressed {{ background-color: #1a1a1a; color: #00aaff; }}
@@ -980,15 +934,15 @@ class WaterfallApp(QMainWindow):
         self.btn_minus.setFixedHeight(SIDEBAR_BTN_HEIGHT)
         self.btn_minus.setStyleSheet(
             f"""
-            QPushButton {{
-                background-color: transparent;
-                border: none;
-                border-bottom: 1px solid #3e4145;
-                color: #ccc;
+            QPushButton {{ 
+                background-color: transparent; 
+                border: none; 
+                border-bottom: 1px solid #3e4145; 
+                color: #ccc; 
                 font-family: 'Malgun Gothic';
-                font-size: {ZOOM_FONT_SIZE}px;
-                font-weight: bold;
-                border-radius: 0px;
+                font-size: {ZOOM_FONT_SIZE}px; 
+                font-weight: bold; 
+                border-radius: 0px; 
             }}
             QPushButton:hover {{ background-color: #3e4145; color: white; }}
             QPushButton:pressed {{ background-color: #1a1a1a; color: #00aaff; }}
@@ -1184,7 +1138,9 @@ class WaterfallApp(QMainWindow):
     def update_zoom_range(self):
         pad_top = self.current_zoom_samples * 0.02
         pad_bottom = self.current_zoom_samples * 0.02
-        self.waterfall.setYRange(-pad_top, self.current_zoom_samples + pad_bottom)
+        self.waterfall.setYRange(
+            -pad_top, self.current_zoom_samples + pad_bottom
+        )
         overlay_pos = self.current_zoom_samples - (self.current_zoom_samples * 0.05)
         self.depth_overlay.setPos(10, overlay_pos)
 
@@ -1205,7 +1161,7 @@ class WaterfallApp(QMainWindow):
         for item in self.waterfall.items():
             if isinstance(item, pg.InfiniteLine) and item != self.depth_line:
                 self.waterfall.removeItem(item)
-        for idx, _ in ticks:
+        for idx, label in ticks:
             if idx > 0:
                 line = pg.InfiniteLine(
                     pos=idx,
@@ -1236,124 +1192,63 @@ class WaterfallApp(QMainWindow):
                 self.current_cycles,
             )
 
-    # ============================================================
-    # --- Helper methods for update_plot_from_buffer (Refactored)
-    # ============================================================
-
-    def _sync_buffer_size(self, raw_data):
-        """Ensure internal buffers match incoming data size."""
-        if len(raw_data) == self.current_max_samples:
-            return
-
-        self.current_max_samples = len(raw_data)
-        self.data = np.zeros((MAX_ROWS, self.current_max_samples))
-        self.tvg_curve = np.linspace(1.0, TVG_STRENGTH, self.current_max_samples)
-        self.depth_history = np.full(MAX_ROWS, np.nan)
-        self.depth_line.setData(
-            x=np.arange(MAX_ROWS),
-            y=self.depth_history,
-            connect="finite",
-        )
-
-    def _update_waterfall_image(self, filtered_line):
-        """Update rolling waterfall image."""
-        self.data = np.roll(self.data, -1, axis=0)
-        self.data[-1, :] = filtered_line
-        self.imageitem.setImage(self.data.T, autoLevels=False)
-        self.imageitem.setLevels((10, 220))
-
-    def _compute_depth_value(self, depth_idx, override_idx):
-        """Determine reliable depth index and reliability flag."""
-        not_blind = depth_idx > PYTHON_IGNORE_INDEX
-        diff = abs(int(depth_idx) - int(override_idx))
-        is_consistent = diff <= INDEX_TOLERANCE
-        is_reliable = not_blind and is_consistent
-
-        target_idx = depth_idx if self.depth_line_mode == "Auto" else override_idx
-
-        return (target_idx if is_reliable else np.nan), is_reliable
-
-    def _update_depth_line(self, depth_value):
-        """Update depth history curve."""
-        self.depth_history = np.roll(self.depth_history, -1)
-        self.depth_history[-1] = depth_value
-
-        if self.show_depth_line:
-            self.depth_line.setData(
-                x=np.arange(MAX_ROWS),
-                y=self.depth_history,
-                connect="finite",
-            )
-            self.depth_line.show()
-        else:
-            self.depth_line.hide()
-
-    def _update_depth_overlay(
-        self,
-        depth_idx,
-        override_idx,
-        drive_frequency,
-        is_reliable,
-    ):
-        """Update overlay text and footer labels."""
-        depth_m = (depth_idx * SAMPLE_RESOLUTION) / 100.0
-        ovr_m = (override_idx * SAMPLE_RESOLUTION) / 100.0
-
-        self.lbl_footer_depth.setText(f"Depth: {depth_m * 100:.0f} cm")
-        self.lbl_footer_ovr.setText(f"Override: {ovr_m * 100:.0f} cm")
-
-        if not self.large_depth_visible:
-            return
-
-        color_hex = "#FFFFFF" if is_reliable else "rgba(255, 255, 255, 0.2)"
-        display_m = depth_m if is_reliable else 0.0
-        freq_text = f"&nbsp;&nbsp;{drive_frequency:.0f}kHz"
-
-        html_str = f"""
-        <div style="text-align: left; line-height: 90%; font-family: 'Malgun Gothic';">
-            <span style="font-size: {OVERLAY_FONT_L}pt; font-weight: 600; color: {color_hex};">
-                {display_m:.1f}
-            </span>
-            <span style="font-size: {OVERLAY_FONT_M}pt; font-weight: 600; color: {color_hex};">
-                m
-            </span><br>
-            <span style="font-size: {OVERLAY_FONT_S}pt; color: #cccccc; font-weight: 600;">
-                {freq_text}
-            </span>
-        </div>
-        """
-        self.depth_overlay.setHtml(html_str)
-
     def update_plot_from_buffer(self):
         if self.latest_frame_data is None:
             return
 
         raw_data = self.latest_frame_data
-        depth_idx, drive_frequency, override_idx = self.latest_frame_meta
+        depth_index, drive_frequency, override_idx = self.latest_frame_meta
 
-        # 1. Sync buffer size if incoming data size changed
-        self._sync_buffer_size(raw_data)
+        if len(raw_data) != self.current_max_samples:
+            if abs(len(raw_data) - self.current_max_samples) > 0:
+                self.current_max_samples = len(raw_data)
+                self.data = np.zeros((MAX_ROWS, self.current_max_samples))
+                self.tvg_curve = np.linspace(
+                    1.0, TVG_STRENGTH, self.current_max_samples
+                )
+                self.depth_history = np.full(MAX_ROWS, np.nan)
+                self.depth_line.setData(
+                    x=np.arange(MAX_ROWS), y=self.depth_history, connect="finite"
+                )
 
-        # 2. DSP pipeline
         filtered = sonar_display_pipeline_optimized(raw_data, self.tvg_curve)
 
-        # 3. Update waterfall image
-        self._update_waterfall_image(filtered)
+        self.data = np.roll(self.data, -1, axis=0)
+        self.data[-1, :] = filtered
+        self.imageitem.setImage(self.data.T, autoLevels=False)
+        self.imageitem.setLevels((10, 220))
 
-        # 4. Compute depth value and reliability
-        depth_value, is_reliable = self._compute_depth_value(depth_idx, override_idx)
+        depth_m = (depth_index * SAMPLE_RESOLUTION) / 100.0
+        ovr_m = (override_idx * SAMPLE_RESOLUTION) / 100.0
 
-        # 5. Update depth line history
-        self._update_depth_line(depth_value)
-
-        # 6. Update overlay and footer
-        self._update_depth_overlay(
-            depth_idx,
-            override_idx,
-            drive_frequency,
-            is_reliable,
+        not_blind = depth_index > PYTHON_IGNORE_INDEX
+        diff = abs(int(depth_index) - int(override_idx))
+        is_consistent = diff <= INDEX_TOLERANCE
+        is_reliable = not_blind and is_consistent
+        target_depth_idx = (
+            depth_index if self.depth_line_mode == "Auto" else override_idx
         )
+        val_to_plot = target_depth_idx if is_reliable else np.nan
 
+        self.depth_history = np.roll(self.depth_history, -1)
+        self.depth_history[-1] = val_to_plot
+        if self.show_depth_line:
+            self.depth_line.setData(
+                x=np.arange(MAX_ROWS), y=self.depth_history, connect="finite"
+            )
+            self.depth_line.show()
+        else:
+            self.depth_line.hide()
+
+        if self.large_depth_visible:
+            color_hex = "#FFFFFF" if is_reliable else "rgba(255, 255, 255, 0.2)"
+            display_val_m = (target_depth_idx * SAMPLE_RESOLUTION) / 100.0
+            freq_text = f"&nbsp;&nbsp;{drive_frequency:.0f}kHz"
+            html_str = f"""<div style="text-align: left; line-height: 90%; font-family: 'Malgun Gothic';"><span style="font-size: {OVERLAY_FONT_L}pt; font-weight: 600; color: {color_hex};">{display_val_m:.1f}</span><span style="font-size: {OVERLAY_FONT_M}pt; font-weight: 600; color: {color_hex};">m</span><br><span style="font-size: {OVERLAY_FONT_S}pt; color: #cccccc; font-weight: 600;">{freq_text}</span></div>"""
+            self.depth_overlay.setHtml(html_str)
+
+        self.lbl_footer_depth.setText(f"Depth: {depth_m * 100:.0f} cm")
+        self.lbl_footer_ovr.setText(f"Override: {ovr_m * 100:.0f} cm")
         self.latest_frame_data = None
 
     # [新增] 處理錄製開關
@@ -1424,14 +1319,11 @@ class WaterfallApp(QMainWindow):
 
     def handle_main_connect(self):
         if self.is_connected:
+            # 斷線邏輯
             if self.serial_thread:
                 self.serial_thread.stop()
                 self.serial_thread.wait()  # Ensure clean exit
                 self.serial_thread = None
-            if self.udp_thread:
-                self.udp_thread.stop()
-                self.udp_thread.wait()
-                self.udp_thread = None
             self.is_connected = False
             self.btn_connect.setText("Connect")
             self.btn_connect.setProperty("class", "sidebar_btn")
@@ -1439,45 +1331,41 @@ class WaterfallApp(QMainWindow):
             self.lbl_footer_depth.setText("Depth: ---")
             self.lbl_footer_ovr.setText("Override: ---")
         else:
-            if self.connection_source == "Serial Port":
-                if not self.serial_port_name or self.serial_port_name == "No Ports":
-                    return print("No Serial Port Selected")
-                self.serial_thread = SerialReader(self.serial_port_name, BAUD_RATE)
-                self.serial_thread.packet_received.connect(self.on_packet_received)
-                self.serial_thread.start()
+            # 連線邏輯 (僅剩 Serial)
+            if not self.serial_port_name or self.serial_port_name == "No Ports":
+                return print("No Serial Port Selected")
+            
+            self.serial_thread = SerialReader(self.serial_port_name, BAUD_RATE)
+            self.serial_thread.packet_received.connect(self.on_packet_received)
+            self.serial_thread.start()
 
-                QThread.msleep(2000)
+            QThread.msleep(2000)
 
-                cmd = struct.pack(">B H", ord("N"), self.current_max_samples)
-                self.serial_thread.send_raw_command(cmd)
-                QThread.msleep(50)
+            # 初始化指令
+            cmd = struct.pack(">B H", ord("N"), self.current_max_samples)
+            self.serial_thread.send_raw_command(cmd)
+            QThread.msleep(50)
 
-                # [關鍵修改] 傳送初始 Delay 與 Cycles
-                val = int(self.current_sample_delay)
-                cmd = struct.pack("BBB", ord("D"), val, int(self.current_cycles))
-                self.serial_thread.send_raw_command(cmd)
-                QThread.msleep(50)
+            # 傳送初始 Delay 與 Cycles
+            val = int(self.current_sample_delay)
+            cmd = struct.pack("BBB", ord("D"), val, int(self.current_cycles))
+            self.serial_thread.send_raw_command(cmd)
+            QThread.msleep(50)
 
-                reg_map = {1: 0x05, 2: 0x07, 3: 0x04, 4: 0x06}
-                val = reg_map.get(self.lna_gain, 0x06)
-                self.serial_thread.send_raw_command(
-                    struct.pack("BBB", ord("W"), 0x13, val)
-                )
+            # 傳送 LNA Gain
+            reg_map = {1: 0x05, 2: 0x07, 3: 0x04, 4: 0x06}
+            val = reg_map.get(self.lna_gain, 0x06)
+            self.serial_thread.send_raw_command(
+                struct.pack("BBB", ord("W"), 0x13, val)
+            )
 
-                data = (self.saved_echo_thr - 1) | 0x10
-                addr = 0x17
-                self.serial_thread.send_raw_command(
-                    struct.pack("BBB", ord("W"), addr, data)
-                )
+            # 傳送 Threshold
+            data = (self.saved_echo_thr - 1) | 0x10
+            addr = 0x17
+            self.serial_thread.send_raw_command(
+                struct.pack("BBB", ord("W"), addr, data)
+            )
 
-            else:
-                try:
-                    self.udp_thread = UDPReader(self.udp_port_num)
-                    self.udp_thread.data_received.connect(self.waterfall_plot_callback)
-                    self.udp_thread.start()
-                except Exception as e:
-                    print(f"[Error] {e}")
-                    return
             self.is_connected = True
             self.btn_connect.setText("Stop")
             self.btn_connect.setProperty("class", "connect_active")
@@ -1501,9 +1389,6 @@ class WaterfallApp(QMainWindow):
         if self.serial_thread:
             self.serial_thread.stop()
             self.serial_thread.wait()  # Wait for thread to finish
-        if self.udp_thread:
-            self.udp_thread.stop()
-            self.udp_thread.wait()
         e.accept()
 
 
