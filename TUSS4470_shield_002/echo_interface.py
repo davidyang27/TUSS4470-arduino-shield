@@ -228,7 +228,9 @@ class DataRecorder(QThread):
             self.file_handle = None
         print("[Recorder] Stopped.")
 
-    def add_data(self, raw_data, depth_idx, drive_freq, speed_of_sound, delay_us, cycles):
+    def add_data(
+        self, raw_data, depth_idx, drive_freq, speed_of_sound, delay_us, cycles
+    ):
         if self.running:
             # 將所有參數打包放入 Queue
             self.queue.put(
@@ -236,7 +238,7 @@ class DataRecorder(QThread):
                     time.time(),
                     raw_data,
                     depth_idx,
-                    drive_freq, # [新增] 加入頻率
+                    drive_freq,  # [新增] 加入頻率
                     speed_of_sound,
                     delay_us,
                     cycles,
@@ -272,13 +274,13 @@ class DataRecorder(QThread):
                 header = struct.pack(
                     "<2s d H h f f H H",
                     b"\xfe\xfe",  # Magic (2)
-                    ts,           # Timestamp (8)
-                    int(depth_idx), # Depth (2)
-                    int(freq),      # Drive Freq (2) - [新增]
-                    float(sos),     # SOS (4)
-                    float(delay),   # Delay (4)
-                    int(cyc),       # Cycles (2)
-                    data_len,       # Len (2)
+                    ts,  # Timestamp (8)
+                    int(depth_idx),  # Depth (2)
+                    int(freq),  # Drive Freq (2) - [新增]
+                    float(sos),  # SOS (4)
+                    float(delay),  # Delay (4)
+                    int(cyc),  # Cycles (2)
+                    data_len,  # Len (2)
                 )
 
                 self.file_handle.write(header)
@@ -1227,6 +1229,7 @@ class WaterfallApp(QMainWindow):
                 self.current_sample_delay,
                 self.current_cycles,
             )
+
     # ============================================================
     # --- Helper methods for update_plot_from_buffer (Refactored)
     # ============================================================
@@ -1238,9 +1241,7 @@ class WaterfallApp(QMainWindow):
 
         self.current_max_samples = len(raw_data)
         self.data = np.zeros((MAX_ROWS, self.current_max_samples))
-        self.tvg_curve = np.linspace(
-            1.0, TVG_STRENGTH, self.current_max_samples
-        )
+        self.tvg_curve = np.linspace(1.0, TVG_STRENGTH, self.current_max_samples)
         self.depth_history = np.full(MAX_ROWS, np.nan)
         self.depth_line.setData(
             x=np.arange(MAX_ROWS),
@@ -1262,9 +1263,7 @@ class WaterfallApp(QMainWindow):
         is_consistent = diff <= INDEX_TOLERANCE
         is_reliable = not_blind and is_consistent
 
-        target_idx = (
-            depth_idx if self.depth_line_mode == "Auto" else override_idx
-        )
+        target_idx = depth_idx if self.depth_line_mode == "Auto" else override_idx
 
         return (target_idx if is_reliable else np.nan), is_reliable
 
@@ -1330,17 +1329,13 @@ class WaterfallApp(QMainWindow):
         self._sync_buffer_size(raw_data)
 
         # 2. DSP pipeline
-        filtered = sonar_display_pipeline_optimized(
-            raw_data, self.tvg_curve
-        )
+        filtered = sonar_display_pipeline_optimized(raw_data, self.tvg_curve)
 
         # 3. Update waterfall image
         self._update_waterfall_image(filtered)
 
         # 4. Compute depth value and reliability
-        depth_value, is_reliable = self._compute_depth_value(
-            depth_idx, override_idx
-        )
+        depth_value, is_reliable = self._compute_depth_value(depth_idx, override_idx)
 
         # 5. Update depth line history
         self._update_depth_line(depth_value)
@@ -1354,7 +1349,6 @@ class WaterfallApp(QMainWindow):
         )
 
         self.latest_frame_data = None
-
 
     # [新增] 處理錄製開關
     def toggle_recording(self):
