@@ -1,0 +1,111 @@
+===================================================================
+                Raspberry Pi 專用聲納 Kiosk 模式設定指南
+===================================================================
+目標：
+1. 開機不進入桌面環境（節省 RAM 與 CPU）。
+2. 自動旋轉螢幕並啟動聲納程式 (echo_interface.bin)。
+3. 提供安全退出與恢復原本桌面模式的方法。
+
+假設使用者名稱：echoingocean01
+假設程式路徑：/home/echoingocean01/Desktop/openecho/TUSS4470-arduino-shield-davidyang27-patch-2/build_nuitka_ultra_slim/echo_interface.bin
+
+-------------------------------------------------------------------
+第一步：建立啟動腳本 (run_sonar.sh)
+-------------------------------------------------------------------
+這個腳本負責處理螢幕旋轉、視窗管理與程式啟動。
+
+1. 開啟終端機，建立腳本檔案：
+   nano /home/echoingocean01/Desktop/run_sonar.sh
+
+2. 貼上以下內容（請確保路徑完全正確）：
+
+   #!/bin/bash
+   
+   # 1. 設定螢幕旋轉 (right=順時針90度, left=逆時針90度)
+   xrandr -o left
+   
+   # 2. 啟動輕量級視窗管理器 (解決全螢幕視窗座標問題)
+   # 如果沒有安裝，請先執行: sudo apt install matchbox-window-manager
+   matchbox-window-manager &
+   
+   # 3. 啟動聲納主程式 (使用絕對路徑)
+   /home/echoingocean01/Desktop/openecho/TUSS4470-arduino-shield-davidyang27-patch-2/build_nuitka_ultra_slim/echo_interface.bin
+
+3. 存檔離開 (Ctrl+X -> Y -> Enter)。
+
+4. 賦予腳本執行權限：
+   chmod +x /home/echoingocean01/Desktop/run_sonar.sh
+
+-------------------------------------------------------------------
+第二步：測試 Kiosk 模式
+-------------------------------------------------------------------
+在設定自動開機前，先手動測試一次確保能正常執行。
+
+1. 如果您現在在桌面環境，請按 Ctrl+Alt+F1 切換到文字介面（或直接登出）。
+2. 在文字介面登入後，執行：
+   sudo startx /home/echoingocean01/Desktop/run_sonar.sh
+
+3. 確認事項：
+   - 螢幕方向正確嗎？
+   - 程式是否全螢幕顯示？
+   - 點擊程式內的 "Quit" 按鈕是否能正常關閉並回到文字介面？
+
+-------------------------------------------------------------------
+第三步：設定開機自動進入 Kiosk 模式
+-------------------------------------------------------------------
+確認測試沒問題後，我們將系統設定為「開機進入文字模式」並「自動執行 startx」。
+
+1. 設定開機進入 Console (純文字自動登入)：
+   執行指令：sudo raspi-config
+   選擇：1 System Options -> S5 Boot / Auto Login -> B2 Console Autologin
+   完成後選擇 Finish，但先不要重新開機。
+
+2. 設定自動執行啟動腳本：
+   編輯 bash 設定檔：
+   nano /home/echoingocean01/.bashrc
+
+3. 捲動到檔案的最底端，加入以下這段判斷式：
+   (這段程式碼確保只有在「實體螢幕 (tty1)」登入時才啟動介面，SSH 連線不會受影響)
+
+   if [[ -z $DISPLAY ]] && [[ $(tty) = /dev/tty1 ]]; then
+       sudo startx /home/echoingocean01/Desktop/run_sonar.sh
+   fi
+
+4. 存檔離開。
+5. 重開機測試：sudo reboot
+
+-------------------------------------------------------------------
+第四步：如何退出 Kiosk 並恢復原本的圖形桌面
+-------------------------------------------------------------------
+當您需要維護系統或修改程式碼時，需要退出 Kiosk 模式。
+
+[暫時退出]
+1. 在聲納程式中，點擊我們新增的 "QUIT APPLICATION" 按鈕。
+   (或者按鍵盤 Alt + F4)
+2. 程式關閉後，畫面會回到黑底白字的指令列。
+
+[永久恢復圖形桌面]
+如果您想變回原本開機就有工作列和桌布的狀態：
+
+1. 移除自動啟動指令：
+   nano /home/echoingocean01/.bashrc
+   (把最下面那段 if [[ -z $DISPLAY ]] ... fi 刪除或加 # 註解掉)
+
+2. 改回桌面啟動設定：
+   sudo raspi-config
+   選擇：1 System Options -> S5 Boot / Auto Login -> B4 Desktop Autologin
+
+3. 重開機：sudo reboot
+
+-------------------------------------------------------------------
+第五步：緊急救援 (如果程式當機無法退出)
+-------------------------------------------------------------------
+如果程式卡死，Quit 按鈕沒反應，也無法離開：
+
+方法 A (透過 SSH 遠端)：
+   用另一台電腦 SSH 連入樹梅派，執行：
+   sudo killall startx
+
+方法 B (鍵盤強制切換)：
+   按 Ctrl + Alt + F2 (切換到另一個終端機)
+   登入後輸入：sudo killall startx
