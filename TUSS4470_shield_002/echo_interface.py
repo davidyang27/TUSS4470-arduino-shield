@@ -187,11 +187,17 @@ def sonar_display_pipeline_optimized(raw_line, tvg_curve):
         )
         line[mask] = 0
 
-    for i in range(1, len(line)):
-        line[i] = SMOOTH_ALPHA * line[i] + (1 - SMOOTH_ALPHA) * line[i - 1]
+    #for i in range(1, len(line)):
+    #    line[i] = SMOOTH_ALPHA * line[i] + (1 - SMOOTH_ALPHA) * line[i - 1]
+        
+        
+    #line[1:] = (
+     #   SMOOTH_ALPHA * line[1:]
+     #   + (1 - SMOOTH_ALPHA) * line[:-1]
+     #   )
 
-    if len(tvg_curve) == len(line):
-        line *= tvg_curve
+    #if len(tvg_curve) == len(line):
+    #    line *= tvg_curve
 
     return np.clip(line, 0, 255).astype(np.uint8)
 
@@ -471,7 +477,7 @@ class SerialReader(QThread):
                     if result:
                         self.packet_received.emit(result)
                     else:
-                        time.sleep(0.001)
+                        time.sleep(0.005)
         except Exception as e:
             print(f"Serial Error: {e}")
 
