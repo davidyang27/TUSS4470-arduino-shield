@@ -192,21 +192,10 @@ def sonar_display_pipeline_optimized(raw_line, tvg_curve):
         )
         line[mask] = 0
 
-    # for i in range(1, len(line)):
-    #     line[i] = SMOOTH_ALPHA * line[i] + (1 - SMOOTH_ALPHA) * line[i - 1]
-
-    # line[1:] = (
-    #    SMOOTH_ALPHA * line[1:]
-    #    + (1 - SMOOTH_ALPHA) * line[:-1]
-    #    )
-
-    # if len(tvg_curve) == len(line):
-    #     line *= tvg_curve
-
     return np.clip(line, 0, 255).astype(np.uint8)
 
 
-# --- [新增] 資料錄製執行緒 ---
+# --- [修改] 資料錄製執行緒 ---
 class DataRecorder(QThread):
     def __init__(self):
         super().__init__()
@@ -238,8 +227,9 @@ class DataRecorder(QThread):
             self.file_handle = None
         print("[Recorder] Stopped.")
 
+    # [修改] 增加 cpu, ram, temp 參數
     def add_data(
-        self, raw_data, depth_idx, drive_freq, speed_of_sound, delay_us, cycles
+        self, raw_data, depth_idx, drive_freq, speed_of_sound, delay_us, cycles, cpu, ram, temp
     ):
         if self.running:
             # 將所有參數打包放入 Queue
@@ -248,10 +238,13 @@ class DataRecorder(QThread):
                     time.time(),
                     raw_data,
                     depth_idx,
-                    drive_freq,  # [新增] 加入頻率
+                    drive_freq,
                     speed_of_sound,
                     delay_us,
                     cycles,
+                    cpu,  # [新增]
+                    ram,  # [新增]
+                    temp, # [新增]
                 )
             )
 
@@ -263,34 +256,41 @@ class DataRecorder(QThread):
             except queue.Empty:
                 continue
 
-            ts, raw_data, depth_idx, freq, sos, delay, cyc = item
+            # [修改] 解包增加的參數
+            ts, raw_data, depth_idx, freq, sos, delay, cyc, cpu, ram, temp = item
 
             # --- 自訂二進位格式 (Big Endian 或 Little Endian 統一即可) ---
-            # [更新] Header 格式 (共 26 bytes)
+            # [更新] Header 格式 (共 38 bytes)
             # 1. Magic Header (2 bytes): 0xFE, 0xFE
             # 2. Timestamp (8 bytes, double)
             # 3. Depth Index (2 bytes, ushort)
-            # 4. Drive Freq (2 bytes, short) - [新增]
+            # 4. Drive Freq (2 bytes, short)
             # 5. Speed Of Sound (4 bytes, float)
             # 6. Delay US (4 bytes, float)
             # 7. Cycles (2 bytes, ushort)
             # 8. Data Length (2 bytes, ushort)
-            # 9. Raw Data (N bytes)
+            # [新增] 9. CPU Usage (4 bytes, float)
+            # [新增] 10. RAM Usage (4 bytes, float)
+            # [新增] 11. Temp (4 bytes, float)
+            # 12. Raw Data (N bytes)
 
             try:
                 data_len = len(raw_data)
-                # Header struct: <2s d H h f f H H (Little Endian)
-                # 注意: freq 是 int16 所以用 'h'
+                # Header struct: <2s d H h f f H H f f f
+                # 增加了三個 'f' (float) 在最後面
                 header = struct.pack(
-                    "<2s d H h f f H H",
+                    "<2s d H h f f H H f f f",
                     b"\xfe\xfe",  # Magic (2)
                     ts,  # Timestamp (8)
                     int(depth_idx),  # Depth (2)
-                    int(freq),  # Drive Freq (2) - [新增]
+                    int(freq),  # Drive Freq (2)
                     float(sos),  # SOS (4)
                     float(delay),  # Delay (4)
                     int(cyc),  # Cycles (2)
                     data_len,  # Len (2)
+                    float(cpu), # [新增] CPU (4)
+                    float(ram), # [新增] RAM (4)
+                    float(temp) # [新增] Temp (4)
                 )
 
                 self.file_handle.write(header)
@@ -1369,13 +1369,24 @@ class WaterfallApp(QMainWindow):
         html_str = f"""<div style="text-align: left; line-height: 90%; font-family: 'Malgun Gothic';"><span style="font-size: {OVERLAY_FONT_L}pt; font-weight: 600; color: {color_hex};">{display_val_m:.1f}</span><span style="font-size: {OVERLAY_FONT_M}pt; font-weight: 600; color: {color_hex};">m</span><br><span style="font-size: {OVERLAY_FONT_S}pt; color: #cccccc; font-weight: 600;">{freq_text}</span></div>"""
         self.depth_overlay.setHtml(html_str)
 
+    # [修改] 從這裡讀取資料，並傳遞給錄製器
     def on_packet_received(self, packet):
         self.latest_frame_data = packet[0]
         self.latest_frame_meta = packet[1:]
 
-        # [新增] 傳遞給錄製器
-        if self.recorder.running:
+        if self.recorder.running and psutil:
             raw, depth, freq, _ = packet
+            
+            # [新增] 快速讀取系統狀態 (非阻塞)
+            cpu = psutil.cpu_percent(interval=None)
+            ram = psutil.virtual_memory().percent
+            temp = 0.0
+            try:
+                with open("/sys/class/thermal/thermal_zone0/temp", "r") as f:
+                    temp = int(f.read()) / 1000.0
+            except:
+                pass
+
             self.recorder.add_data(
                 raw,
                 depth,
@@ -1383,6 +1394,9 @@ class WaterfallApp(QMainWindow):
                 self.current_speed,
                 self.current_sample_delay,
                 self.current_cycles,
+                cpu,  # 傳入 CPU
+                ram,  # 傳入 RAM
+                temp  # 傳入 Temp
             )
 
     def update_plot_from_buffer(self):
