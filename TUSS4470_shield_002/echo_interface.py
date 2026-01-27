@@ -79,7 +79,7 @@ TVG_STRENGTH = 1.2
 
 # 渲染優化參數
 MAX_DISPLAY_SAMPLES = 2000
-FPS_LIMIT = 30
+FPS_LIMIT = 10
 
 COLOR_MAPS = [
     "thermal",
@@ -493,7 +493,7 @@ class SettingsDialog(QDialog):
         self.main_app = parent
         self.setWindowTitle("Config")
         # 調整視窗大小，高度稍微縮小因為我們要把間距變緊湊
-        self.resize(int(340 * UI_SCALE_FACTOR), int(600 * UI_SCALE_FACTOR))
+        self.resize(int(340 * UI_SCALE_FACTOR), int(380 * UI_SCALE_FACTOR))
         self.echo_thr_val = self.main_app.saved_echo_thr
 
         lbl_size = int(11 * UI_SCALE_FACTOR)
@@ -959,7 +959,8 @@ class WaterfallApp(QMainWindow):
         self.latest_frame_meta = None
 
         self.setWindowTitle("Open Echo Interface")
-        self.resize(int(900 * UI_SCALE_FACTOR), int(550 * UI_SCALE_FACTOR))
+        # self.resize(int(900 * UI_SCALE_FACTOR), int(550 * UI_SCALE_FACTOR))
+        self.showMaximized()
         self.setStyleSheet(
             f"""
             * {{ font-family: 'Malgun Gothic', Arial, sans-serif; }}
@@ -1004,6 +1005,11 @@ class WaterfallApp(QMainWindow):
         left_layout.setContentsMargins(0, 0, 0, 0)
         left_layout.setSpacing(0)
         self.waterfall = pg.PlotWidget(background="k")
+        
+        self.waterfall.setMouseEnabled(x=False, y=False)
+        self.waterfall.plotItem.setAutoVisible(y=False)
+        self.waterfall.setClipToView(True)
+        
         vb = self.waterfall.getViewBox()
         vb.setDefaultPadding(0)
         self.waterfall.setMouseEnabled(x=False, y=False)
@@ -1019,6 +1025,7 @@ class WaterfallApp(QMainWindow):
         y_right.setPen(pg.mkPen(color=(100, 100, 100)))
 
         self.imageitem = pg.ImageItem(axisOrder="row-major")
+        self.imageitem.setOpts(autoDownsample=True)
         self.waterfall.addItem(self.imageitem)
         self.waterfall.invertY(True)
         self.depth_overlay = pg.TextItem(anchor=(0, 1))
