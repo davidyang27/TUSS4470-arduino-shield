@@ -960,9 +960,12 @@ class WaterfallApp(QMainWindow):
         self.latest_frame_data = None
         self.latest_frame_meta = None
 
-        # [新增] 用來暫存最新的 CPU 和 Fan 數值，解決讀取衝突
+        # [新增] 用來暫存最新的 CPU 和 Fan 數值 (緩存機制)
+        # 解決 Nuitka 編譯後讀取過快導致 psutil.cpu_percent 歸零的問題
         self.current_cpu_usage = 0.0 
-        self.current_fan_rpm = 0.0
+        self.current_ram_usage = 0.0
+        self.current_temp = 0.0
+        self.current_fan_rpm = 0
 
         self.setWindowTitle("Open Echo Interface")
         # self.resize(int(900 * UI_SCALE_FACTOR), int(550 * UI_SCALE_FACTOR))
@@ -1386,7 +1389,7 @@ class WaterfallApp(QMainWindow):
         html_str = f"""<div style="text-align: left; line-height: 90%; font-family: 'Malgun Gothic';"><span style="font-size: {OVERLAY_FONT_L}pt; font-weight: 600; color: {color_hex};">{display_val_m:.1f}</span><span style="font-size: {OVERLAY_FONT_M}pt; font-weight: 600; color: {color_hex};">m</span><br><span style="font-size: {OVERLAY_FONT_S}pt; color: #cccccc; font-weight: 600;">{freq_text}</span></div>"""
         self.depth_overlay.setHtml(html_str)
 
-    # [修改] 從這裡讀取資料，並傳遞給錄製器
+    # [修改] on_packet_received 改為 "只讀取"，不再負責計算 psutil
     def on_packet_received(self, packet):
         self.latest_frame_data = packet[0]
         self.latest_frame_meta = packet[1:]
@@ -1394,27 +1397,10 @@ class WaterfallApp(QMainWindow):
         if self.recorder.running and psutil:
             raw, depth, freq, _ = packet
             
-            # [修改] 計算 CPU，並存入 self.current_cpu_usage
-            cpu = psutil.cpu_percent(interval=None)
-            self.current_cpu_usage = cpu 
-
-            ram = psutil.virtual_memory().percent
-            temp = 0.0
-            try:
-                with open("/sys/class/thermal/thermal_zone0/temp", "r") as f:
-                    temp = int(f.read()) / 1000.0
-            except:
-                pass
+            # [關鍵修正] 
+            # 這裡不再呼叫 psutil.cpu_percent (因為速度太快會導致回傳 0.0)
+            # 改為直接讀取 update_system_stats 每秒算好的數值 (self.current_cpu_usage)
             
-            # [新增] 讀取風扇轉速，並存入 self.current_fan_rpm (轉 int)
-            fan_rpm = 0
-            try:
-                with open("/sys/class/hwmon/hwmon2/fan1_input", "r") as f:
-                    fan_rpm = int(f.read().strip())
-                    self.current_fan_rpm = fan_rpm
-            except:
-                pass
-
             self.recorder.add_data(
                 raw,
                 depth,
@@ -1422,10 +1408,10 @@ class WaterfallApp(QMainWindow):
                 self.current_speed,
                 self.current_sample_delay,
                 self.current_cycles,
-                cpu,
-                ram,
-                temp,
-                fan_rpm # [新增] Fan (int)
+                self.current_cpu_usage,  # 直接使用共享變數
+                self.current_ram_usage,  # 直接使用共享變數
+                self.current_temp,       # 直接使用共享變數
+                self.current_fan_rpm     # 直接使用共享變數 (int)
             )
 
     def update_plot_from_buffer(self):
@@ -1487,45 +1473,53 @@ class WaterfallApp(QMainWindow):
         self.lbl_footer_ovr.setText(f"Override: {ovr_m * 100:.0f} cm")
         self.latest_frame_data = None
 
+    # [修改] 這是唯一負責計算與更新系統狀態的地方 (每秒執行)
     def update_system_stats(self):
         if psutil is None:
             return
 
-        # [關鍵] CPU & Fan: 判斷誰來負責計算
-        if self.recorder.running:
-            cpu_usage = self.current_cpu_usage
-            fan_rpm = self.current_fan_rpm
-        else:
-            cpu_usage = psutil.cpu_percent(interval=None)
-            self.current_cpu_usage = cpu_usage
-            
-            fan_rpm = 0
-            try:
-                with open("/sys/class/hwmon/hwmon2/fan1_input", "r") as f:
-                    fan_rpm = int(f.read().strip())
-                    self.current_fan_rpm = fan_rpm
-            except:
-                pass
-
-        ram_usage = psutil.virtual_memory().percent
+        # ==================================================
+        # [關鍵邏輯] 統一讀取所有感測器數值，並存入共享變數
+        # 這樣做能確保 psutil 每次間隔足夠長 (~1秒)，計算出的 CPU 數值才準確
+        # ==================================================
         
-        temp = 0.0
+        # 1. 計算 CPU (間隔固定為 1 秒左右，數值會很準)
+        try:
+            self.current_cpu_usage = psutil.cpu_percent(interval=None)
+        except:
+            self.current_cpu_usage = 0.0
+
+        # 2. 讀取 RAM
+        try:
+            self.current_ram_usage = psutil.virtual_memory().percent
+        except:
+            self.current_ram_usage = 0.0
+            
+        # 3. 讀取溫度
         try:
             with open("/sys/class/thermal/thermal_zone0/temp", "r") as f:
-                temp_milli = int(f.read())
-                temp = temp_milli / 1000.0
-        except FileNotFoundError:
-            temp = 0.0 
-        
-        # 更新文字
-        self.lbl_cpu.setText(f"CPU: {cpu_usage:.1f}%")
-        self.lbl_ram.setText(f"RAM: {ram_usage:.1f}%")
-        self.lbl_temp.setText(f"Temp: {temp:.1f}°C")
-        self.lbl_fan.setText(f"Fan: {int(fan_rpm)} RPM") # 強制轉 int 顯示
+                self.current_temp = int(f.read()) / 1000.0
+        except:
+            self.current_temp = 0.0
+            
+        # 4. 讀取風扇
+        try:
+            with open("/sys/class/hwmon/hwmon2/fan1_input", "r") as f:
+                self.current_fan_rpm = int(f.read().strip())
+        except:
+            self.current_fan_rpm = 0
 
-        # [修改] 顏色控制邏輯
-        if temp > 75:
-            # 警告狀態：強制變紅且加粗 (會暫時覆蓋原本的 footerLabel 設定)
+        # ==================================================
+        # 更新 GUI 顯示
+        # ==================================================
+        self.lbl_cpu.setText(f"CPU: {self.current_cpu_usage:.1f}%")
+        self.lbl_ram.setText(f"RAM: {self.current_ram_usage:.1f}%")
+        self.lbl_temp.setText(f"Temp: {self.current_temp:.1f}°C")
+        self.lbl_fan.setText(f"Fan: {self.current_fan_rpm} RPM")
+
+        # 顏色警示
+        if self.current_temp > 75:
+            # 警告狀態：強制變紅且加粗
             f_size = int(10 * UI_SCALE_FACTOR)
             self.lbl_temp.setStyleSheet(f"color: #ff5555; font-weight: bold; font-size: {f_size}px;")
         else:
