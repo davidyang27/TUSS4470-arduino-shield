@@ -227,9 +227,9 @@ class DataRecorder(QThread):
             self.file_handle = None
         print("[Recorder] Stopped.")
 
-    # [修改] 增加 cpu, ram, temp 參數
+    # [修改] 增加 fan 參數
     def add_data(
-        self, raw_data, depth_idx, drive_freq, speed_of_sound, delay_us, cycles, cpu, ram, temp
+        self, raw_data, depth_idx, drive_freq, speed_of_sound, delay_us, cycles, cpu, ram, temp, fan
     ):
         if self.running:
             # 將所有參數打包放入 Queue
@@ -242,9 +242,10 @@ class DataRecorder(QThread):
                     speed_of_sound,
                     delay_us,
                     cycles,
-                    cpu,  # [新增]
-                    ram,  # [新增]
-                    temp, # [新增]
+                    cpu,
+                    ram,
+                    temp,
+                    fan, # [新增] Fan (整數)
                 )
             )
 
@@ -256,30 +257,30 @@ class DataRecorder(QThread):
             except queue.Empty:
                 continue
 
-            # [修改] 解包增加的參數
-            ts, raw_data, depth_idx, freq, sos, delay, cyc, cpu, ram, temp = item
+            # [修改] 解包增加的 fan 參數
+            ts, raw_data, depth_idx, freq, sos, delay, cyc, cpu, ram, temp, fan = item
 
             # --- 自訂二進位格式 (Big Endian 或 Little Endian 統一即可) ---
-            # [更新] Header 格式 (共 38 bytes)
-            # 1. Magic Header (2 bytes): 0xFE, 0xFE
-            # 2. Timestamp (8 bytes, double)
-            # 3. Depth Index (2 bytes, ushort)
-            # 4. Drive Freq (2 bytes, short)
-            # 5. Speed Of Sound (4 bytes, float)
-            # 6. Delay US (4 bytes, float)
-            # 7. Cycles (2 bytes, ushort)
-            # 8. Data Length (2 bytes, ushort)
-            # [新增] 9. CPU Usage (4 bytes, float)
-            # [新增] 10. RAM Usage (4 bytes, float)
-            # [新增] 11. Temp (4 bytes, float)
-            # 12. Raw Data (N bytes)
+            # [更新] Header 格式 (共 42 bytes)
+            # 格式說明:
+            # 1. Magic (2s) -> 2 bytes
+            # 2. Timestamp (d) -> 8 bytes
+            # 3. Depth (H) -> 2 bytes
+            # 4. Freq (h) -> 2 bytes
+            # 5. SOS (f) -> 4 bytes
+            # 6. Delay (f) -> 4 bytes
+            # 7. Cycles (H) -> 2 bytes
+            # 8. Len (H) -> 2 bytes
+            # 9. CPU (f) -> 4 bytes
+            # 10. RAM (f) -> 4 bytes
+            # 11. Temp (f) -> 4 bytes
+            # 12. Fan (I) -> 4 bytes [修改為 I = unsigned int，整數]
 
             try:
                 data_len = len(raw_data)
-                # Header struct: <2s d H h f f H H f f f
-                # 增加了三個 'f' (float) 在最後面
+                # 注意最後一個是 'I' (Integer)，不是 'f' (float)
                 header = struct.pack(
-                    "<2s d H h f f H H f f f",
+                    "<2s d H h f f H H f f f I",
                     b"\xfe\xfe",  # Magic (2)
                     ts,  # Timestamp (8)
                     int(depth_idx),  # Depth (2)
@@ -288,9 +289,10 @@ class DataRecorder(QThread):
                     float(delay),  # Delay (4)
                     int(cyc),  # Cycles (2)
                     data_len,  # Len (2)
-                    float(cpu), # [新增] CPU (4)
-                    float(ram), # [新增] RAM (4)
-                    float(temp) # [新增] Temp (4)
+                    float(cpu), # CPU (4)
+                    float(ram), # RAM (4)
+                    float(temp), # Temp (4)
+                    int(fan)     # [修改] Fan (4) 強制轉 int
                 )
 
                 self.file_handle.write(header)
@@ -958,6 +960,10 @@ class WaterfallApp(QMainWindow):
         self.latest_frame_data = None
         self.latest_frame_meta = None
 
+        # [新增] 用來暫存最新的 CPU 和 Fan 數值，解決讀取衝突
+        self.current_cpu_usage = 0.0 
+        self.current_fan_rpm = 0.0
+
         self.setWindowTitle("Open Echo Interface")
         # self.resize(int(900 * UI_SCALE_FACTOR), int(550 * UI_SCALE_FACTOR))
         self.showMaximized()
@@ -1057,13 +1063,16 @@ class WaterfallApp(QMainWindow):
 
         # [修改] 右邊：系統狀態
         # 全部都設定 objectName 為 "footerLabel"
-        # 這樣它們就會跟 Depth 一模一樣 (顏色 #aaa, 沒背景)
         
         self.lbl_cpu = QLabel("CPU: --%")
         self.lbl_cpu.setObjectName("footerLabel") 
 
         self.lbl_temp = QLabel("Temp: --°C")
         self.lbl_temp.setObjectName("footerLabel")
+        
+        # [新增] Fan Label
+        self.lbl_fan = QLabel("Fan: -- RPM")
+        self.lbl_fan.setObjectName("footerLabel")
 
         self.lbl_ram = QLabel("RAM: --%")
         self.lbl_ram.setObjectName("footerLabel")
@@ -1076,7 +1085,8 @@ class WaterfallApp(QMainWindow):
 
         footer_layout.addWidget(self.lbl_cpu)  # 右 1
         footer_layout.addWidget(self.lbl_temp) # 右 2
-        footer_layout.addWidget(self.lbl_ram)  # 右 3
+        footer_layout.addWidget(self.lbl_fan)  # [新增] 右 3 (Temp 後面)
+        footer_layout.addWidget(self.lbl_ram)  # 右 4
 
         left_layout.addWidget(footer_frame)
         main_layout.addWidget(left_container, stretch=1)
@@ -1384,13 +1394,24 @@ class WaterfallApp(QMainWindow):
         if self.recorder.running and psutil:
             raw, depth, freq, _ = packet
             
-            # [新增] 快速讀取系統狀態 (非阻塞)
+            # [修改] 計算 CPU，並存入 self.current_cpu_usage
             cpu = psutil.cpu_percent(interval=None)
+            self.current_cpu_usage = cpu 
+
             ram = psutil.virtual_memory().percent
             temp = 0.0
             try:
                 with open("/sys/class/thermal/thermal_zone0/temp", "r") as f:
                     temp = int(f.read()) / 1000.0
+            except:
+                pass
+            
+            # [新增] 讀取風扇轉速，並存入 self.current_fan_rpm (轉 int)
+            fan_rpm = 0
+            try:
+                with open("/sys/class/hwmon/hwmon2/fan1_input", "r") as f:
+                    fan_rpm = int(f.read().strip())
+                    self.current_fan_rpm = fan_rpm
             except:
                 pass
 
@@ -1401,9 +1422,10 @@ class WaterfallApp(QMainWindow):
                 self.current_speed,
                 self.current_sample_delay,
                 self.current_cycles,
-                cpu,  # 傳入 CPU
-                ram,  # 傳入 RAM
-                temp  # 傳入 Temp
+                cpu,
+                ram,
+                temp,
+                fan_rpm # [新增] Fan (int)
             )
 
     def update_plot_from_buffer(self):
@@ -1469,7 +1491,22 @@ class WaterfallApp(QMainWindow):
         if psutil is None:
             return
 
-        cpu_usage = psutil.cpu_percent(interval=None)
+        # [關鍵] CPU & Fan: 判斷誰來負責計算
+        if self.recorder.running:
+            cpu_usage = self.current_cpu_usage
+            fan_rpm = self.current_fan_rpm
+        else:
+            cpu_usage = psutil.cpu_percent(interval=None)
+            self.current_cpu_usage = cpu_usage
+            
+            fan_rpm = 0
+            try:
+                with open("/sys/class/hwmon/hwmon2/fan1_input", "r") as f:
+                    fan_rpm = int(f.read().strip())
+                    self.current_fan_rpm = fan_rpm
+            except:
+                pass
+
         ram_usage = psutil.virtual_memory().percent
         
         temp = 0.0
@@ -1484,16 +1521,15 @@ class WaterfallApp(QMainWindow):
         self.lbl_cpu.setText(f"CPU: {cpu_usage:.1f}%")
         self.lbl_ram.setText(f"RAM: {ram_usage:.1f}%")
         self.lbl_temp.setText(f"Temp: {temp:.1f}°C")
+        self.lbl_fan.setText(f"Fan: {int(fan_rpm)} RPM") # 強制轉 int 顯示
 
         # [修改] 顏色控制邏輯
         if temp > 75:
             # 警告狀態：強制變紅且加粗 (會暫時覆蓋原本的 footerLabel 設定)
-            # 這裡必須重新指定 font-size，以免覆蓋後字變小
             f_size = int(10 * UI_SCALE_FACTOR)
             self.lbl_temp.setStyleSheet(f"color: #ff5555; font-weight: bold; font-size: {f_size}px;")
         else:
             # 正常狀態：清空樣式表
-            # 這樣它就會自動變回 "footerLabel" 定義的樣子 (#aaa)
             self.lbl_temp.setStyleSheet("")
 
     # [新增] 處理錄製開關
