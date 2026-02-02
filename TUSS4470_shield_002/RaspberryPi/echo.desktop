@@ -1,0 +1,7 @@
+#/home/echoingocean01/.config/autostart/echo.desktop
+[Desktop Entry]
+Type=Application
+Name=Echo Interface
+Exec=/home/echoingocean01/Desktop/openecho/TUSS4470-arduino-shield-davidyang27-patch-2/build_nuitka/echo_interface.bin
+Terminal=false
+X-GNOME-Autostart-enabled=true
