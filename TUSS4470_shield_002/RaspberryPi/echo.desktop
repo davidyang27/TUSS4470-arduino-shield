@@ -2,6 +2,6 @@
 [Desktop Entry]
 Type=Application
 Name=Echo Interface
-Exec=/home/echoingocean01/Desktop/openecho/TUSS4470-arduino-shield-davidyang27-patch-2/build_nuitka/echo_interface.bin
+Exec=bash -c "export QT_QPA_PLATFORM=wayland && nice -n -10 /home/echoingocean01/Desktop/openecho/TUSS4470-arduino-shield-davidyang27-patch-2/build_nuitka/echo_interface.bin"
 Terminal=false
 X-GNOME-Autostart-enabled=true
