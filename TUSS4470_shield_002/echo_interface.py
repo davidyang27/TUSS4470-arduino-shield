@@ -195,109 +195,101 @@ def sonar_display_pipeline_optimized(raw_line, tvg_curve):
     return np.clip(line, 0, 255).astype(np.uint8)
 
 
-# --- [修改] 資料錄製執行緒 ---
+# --- [修改] 資料錄製執行緒 (支援自動分檔 + 序列命名) ---
 class DataRecorder(QThread):
     def __init__(self):
         super().__init__()
         self.queue = queue.Queue()
         self.running = False
         self.file_handle = None
-        self.filename = ""
-        self.start_time = 0
+        self.current_folder = "."
+        
+        # 用來記錄這一次錄影的 "基準名稱"
+        self.session_base_name = ""
+        # 檔案序號
+        self.file_sequence = 1
+        
+        # [設定] 單一檔案最大限制 (建議 500MB)
+        self.max_file_size_bytes = 500 * 1024 * 1024 
 
     def start_recording(self, folder_path="."):
+        self.current_folder = folder_path
+        
+        # 1. 產生這一次錄影的 "唯一基準名稱" (Session ID)
+        # 例如: sonar_log_20260202_120000
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.filename = os.path.join(folder_path, f"sonar_log_{timestamp}.bin")
-        try:
-            self.file_handle = open(self.filename, "wb")
+        self.session_base_name = f"sonar_log_{timestamp}"
+        
+        # 2. 重置序號
+        self.file_sequence = 1
+        
+        if self._open_new_file():
             self.running = True
-            self.start_time = time.time()
             self.start()
-            print(f"[Recorder] Started: {self.filename}")
+            return True
+        return False
+
+    def _open_new_file(self):
+        """內部函式：使用基準名稱 + 序號產生新檔名"""
+        # 檔名變成: sonar_log_20260202_120000_1.bin, _2.bin ...
+        filename = os.path.join(
+            self.current_folder, 
+            f"{self.session_base_name}_{self.file_sequence}.bin"
+        )
+        
+        try:
+            if self.file_handle:
+                self.file_handle.close()
+            
+            self.file_handle = open(filename, "wb")
+            print(f"[Recorder] Writing to: {filename}")
+            
+            # 準備下一個檔案的序號
+            self.file_sequence += 1
             return True
         except Exception as e:
-            print(f"[Recorder] Error opening file: {e}")
+            print(f"[Recorder] Error creating file: {e}")
             return False
 
     def stop_recording(self):
         self.running = False
-        self.wait()  # 等待 run 迴圈結束
+        self.wait()
         if self.file_handle:
             self.file_handle.close()
             self.file_handle = None
         print("[Recorder] Stopped.")
 
-    # [修改] 增加 fan 參數
-    def add_data(
-        self, raw_data, depth_idx, drive_freq, speed_of_sound, delay_us, cycles, cpu, ram, temp, fan
-    ):
+    def add_data(self, raw_data, depth_idx, drive_freq, speed_of_sound, delay_us, cycles, cpu, ram, temp, fan):
         if self.running:
-            # 將所有參數打包放入 Queue
-            self.queue.put(
-                (
-                    time.time(),
-                    raw_data,
-                    depth_idx,
-                    drive_freq,
-                    speed_of_sound,
-                    delay_us,
-                    cycles,
-                    cpu,
-                    ram,
-                    temp,
-                    fan, # [新增] Fan (整數)
-                )
-            )
+            self.queue.put((time.time(), raw_data, depth_idx, drive_freq, speed_of_sound, delay_us, cycles, cpu, ram, temp, fan))
 
     def run(self):
         while self.running or not self.queue.empty():
             try:
-                # Get data with timeout to check self.running periodically
                 item = self.queue.get(timeout=0.1)
             except queue.Empty:
                 continue
 
-            # [修改] 解包增加的 fan 參數
             ts, raw_data, depth_idx, freq, sos, delay, cyc, cpu, ram, temp, fan = item
-
-            # --- 自訂二進位格式 (Big Endian 或 Little Endian 統一即可) ---
-            # [更新] Header 格式 (共 42 bytes)
-            # 格式說明:
-            # 1. Magic (2s) -> 2 bytes
-            # 2. Timestamp (d) -> 8 bytes
-            # 3. Depth (H) -> 2 bytes
-            # 4. Freq (h) -> 2 bytes
-            # 5. SOS (f) -> 4 bytes
-            # 6. Delay (f) -> 4 bytes
-            # 7. Cycles (H) -> 2 bytes
-            # 8. Len (H) -> 2 bytes
-            # 9. CPU (f) -> 4 bytes
-            # 10. RAM (f) -> 4 bytes
-            # 11. Temp (f) -> 4 bytes
-            # 12. Fan (I) -> 4 bytes [修改為 I = unsigned int，整數]
 
             try:
                 data_len = len(raw_data)
-                # 注意最後一個是 'I' (Integer)，不是 'f' (float)
+                # Header struct: <2s d H h f f H H f f f I (42 bytes)
                 header = struct.pack(
                     "<2s d H h f f H H f f f I",
-                    b"\xfe\xfe",  # Magic (2)
-                    ts,  # Timestamp (8)
-                    int(depth_idx),  # Depth (2)
-                    int(freq),  # Drive Freq (2)
-                    float(sos),  # SOS (4)
-                    float(delay),  # Delay (4)
-                    int(cyc),  # Cycles (2)
-                    data_len,  # Len (2)
-                    float(cpu), # CPU (4)
-                    float(ram), # RAM (4)
-                    float(temp), # Temp (4)
-                    int(fan)     # [修改] Fan (4) 強制轉 int
+                    b"\xfe\xfe", ts, int(depth_idx), int(freq), float(sos), float(delay),
+                    int(cyc), data_len, float(cpu), float(ram), float(temp), int(fan)
                 )
 
                 self.file_handle.write(header)
                 self.file_handle.write(raw_data.tobytes())
-                self.file_handle.flush()  # 確保寫入磁碟
+                
+                # 檢查大小，若超過則換檔 (無縫切換)
+                if self.file_handle.tell() >= self.max_file_size_bytes:
+                    self.file_handle.flush()
+                    print(f"[Recorder] File limit reached ({self.max_file_size_bytes/1024/1024:.0f}MB), rotating...")
+                    self._open_new_file()
+
             except Exception as e:
                 print(f"[Recorder] Write Error: {e}")
 
@@ -505,7 +497,7 @@ class SettingsDialog(QDialog):
 
         # [新增] 設定滾動條寬度 (加粗，方便觸控)
         # 35px 在觸控螢幕上是大拇指比較好操作的寬度
-        sb_width = int(35 * UI_SCALE_FACTOR)
+        sb_width = int(20 * UI_SCALE_FACTOR)
 
         self.setStyleSheet(
             f"""
@@ -969,6 +961,9 @@ class WaterfallApp(QMainWindow):
         ports = get_serial_ports()
         if ports:
             self.serial_port_name = ports[0]
+        
+        # [新增] 錄影開始時間變數
+        self.record_start_time = 0.0
         
         self.is_connected = False
         self.nmea_output_enabled = False
@@ -1544,6 +1539,24 @@ class WaterfallApp(QMainWindow):
             self.current_fan_rpm = 0
 
         # ==================================================
+        # [新增] 更新錄影計時器
+        # ==================================================
+        if self.recorder.running:
+            # 計算經過秒數
+            elapsed_seconds = int(time.time() - self.record_start_time)
+            
+            # 轉成 HH:MM:SS 格式
+            # divmod(總秒數, 60) -> (總分鐘, 餘秒)
+            # divmod(總分鐘, 60) -> (小時, 分鐘)
+            m, s = divmod(elapsed_seconds, 60)
+            h, m = divmod(m, 60)
+            
+            # 更新按鈕文字 (Rec 01:23:45)
+            # 使用 f-string 的 :02d 補零
+            time_str = f"Rec {h:02d}:{m:02d}:{s:02d}"
+            self.btn_record.setText(time_str)
+
+        # ==================================================
         # 更新 GUI 顯示
         # ==================================================
         self.lbl_cpu.setText(f"CPU: {self.current_cpu_usage:.1f}%")
@@ -1617,7 +1630,11 @@ class WaterfallApp(QMainWindow):
                 if files:
                     folder = files[0]
                     if self.recorder.start_recording(folder):
-                        self.btn_record.setText("Stop Rec")
+                        # [關鍵] 記錄開始那一刻的時間
+                        self.record_start_time = time.time()
+                        # 初始文字
+                        self.btn_record.setText("00:00:00")
+                        #self.btn_record.setText("Stop Rec")
                         self.btn_record.setProperty("class", "record_active")
                         self.btn_record.setStyle(self.btn_record.style())
         else:
