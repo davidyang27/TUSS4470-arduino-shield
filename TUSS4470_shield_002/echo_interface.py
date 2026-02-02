@@ -494,20 +494,24 @@ class SettingsDialog(QDialog):
         super().__init__(parent)
         self.main_app = parent
         self.setWindowTitle("Config")
-        # 調整視窗大小，高度稍微縮小因為我們要把間距變緊湊
+        # 調整視窗大小
         self.resize(int(340 * UI_SCALE_FACTOR), int(380 * UI_SCALE_FACTOR))
         self.echo_thr_val = self.main_app.saved_echo_thr
 
         lbl_size = int(11 * UI_SCALE_FACTOR)
         
-        # [關鍵] 設定統一的標籤寬度，確保所有區塊的輸入框左邊切齊
+        # 設定統一的標籤寬度
         fixed_label_width = int(70 * UI_SCALE_FACTOR) 
+
+        # [新增] 設定滾動條寬度 (加粗，方便觸控)
+        # 35px 在觸控螢幕上是大拇指比較好操作的寬度
+        sb_width = int(35 * UI_SCALE_FACTOR)
 
         self.setStyleSheet(
             f"""
             QDialog {{ background-color: #2b2b2b; color: #e0e0e0; font-family: 'Malgun Gothic', Arial; }}
             
-            /* 通用標籤樣式 (設定固定寬度以達成對齊) */
+            /* 通用標籤樣式 */
             QLabel {{ 
                 color: #e0e0e0; 
                 font-weight: bold; 
@@ -526,6 +530,11 @@ class SettingsDialog(QDialog):
                 color: #e0e0e0;
                 font-weight: bold;
                 spacing: 5px;
+            }}
+            /* 讓 Checkbox 的點擊區域變大一點 */
+            QCheckBox::indicator {{
+                width: {int(20 * UI_SCALE_FACTOR)}px;
+                height: {int(20 * UI_SCALE_FACTOR)}px;
             }}
 
             /* 輸入框與下拉選單樣式 */
@@ -547,7 +556,7 @@ class SettingsDialog(QDialog):
             QPushButton#applyBtn {{ background-color: #0078d7; border-color: #005a9e; }}
             QPushButton#applyBtn:hover {{ background-color: #006cbd; }}
             
-            /* [新增] Quit 按鈕專用樣式 (紅色警戒) */
+            /* Quit 按鈕專用樣式 */
             QPushButton#quitBtn {{ 
                 background-color: #aa0000; 
                 border: 1px solid #ff3333; 
@@ -557,12 +566,12 @@ class SettingsDialog(QDialog):
                 background-color: #cc0000; 
             }}
 
-            /* [修改] GroupBox 緊湊化設計 */
+            /* GroupBox 樣式 */
             QGroupBox {{ 
                 border: 1px solid #444; 
                 border-radius: 4px; 
-                margin-top: {int(8 * UI_SCALE_FACTOR)}px; /* 標題空間 */
-                padding-top: {int(12 * UI_SCALE_FACTOR)}px; /* 內部上方留白縮小 */
+                margin-top: {int(8 * UI_SCALE_FACTOR)}px;
+                padding-top: {int(12 * UI_SCALE_FACTOR)}px;
                 padding-bottom: 8px;
                 padding-left: 8px;
                 padding-right: 8px;
@@ -570,7 +579,6 @@ class SettingsDialog(QDialog):
                 font-size: {SETTINGS_FONT_SIZE}px; 
             }}
             
-            /* [修改] 標題透明化且位置微調 */
             QGroupBox::title {{ 
                 subcontrol-origin: margin; 
                 subcontrol-position: top left; 
@@ -582,10 +590,36 @@ class SettingsDialog(QDialog):
             
             QScrollArea {{ border: none; background-color: transparent; }}
             QWidget#scrollContent {{ background-color: transparent; }}
+
+            /* ======================================================= */
+            /* [新增] 滾動條 (Scrollbar) 觸控優化樣式 */
+            /* ======================================================= */
+            QScrollBar:vertical {{
+                border: none;
+                background: #2b2b2b; /* 背景色跟視窗一樣，比較不突兀 */
+                width: {sb_width}px; /* 加寬 */
+                margin: 0px 0px 0px 0px;
+            }}
+            QScrollBar::handle:vertical {{
+                background: #555;    /* 拉桿顏色 (深灰) */
+                min-height: {sb_width}px;
+                border-radius: 4px;  /* 圓角 */
+            }}
+            QScrollBar::handle:vertical:pressed {{
+                background: #0078d7; /* 按下變藍色 */
+            }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
+                height: 0px;         /* 隱藏上下箭頭，增加觸控滑動空間 */
+            }}
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
+                background: none;    /* 點擊空白處的背景 */
+            }}
         """
         )
 
+        # 以下程式碼維持不變...
         main_layout = QVBoxLayout(self)
+        # ... (後面的程式碼完全不用動) ...
         main_layout.setContentsMargins(5, 5, 5, 5)
         main_layout.setSpacing(5)
         
