@@ -1,0 +1,32 @@
+python3 -m nuitka --standalone --onefile \
+      --enable-plugin=pyqt5 \
+      --enable-plugin=numpy \
+      --include-qt-plugins=platforms \
+      --lto=yes \
+      --jobs=4 \
+      --nofollow-import-to=PyQt5.QtQml \
+      --nofollow-import-to=PyQt5.QtQuick \
+      --nofollow-import-to=PyQt5.QtSql \
+      --nofollow-import-to=PyQt5.QtNetwork \
+      --nofollow-import-to=PyQt5.QtMultimedia \
+      --nofollow-import-to=PyQt5.QtWebEngine \
+      --nofollow-import-to=PyQt5.QtWebEngineWidgets \
+      --nofollow-import-to=PyQt5.Qt3D \
+      --nofollow-import-to=PyQt5.QtTest \
+      --nofollow-import-to=PyQt5.QtPrintSupport \
+      --nofollow-import-to=PyQt5.QtSvg \
+      --nofollow-import-to=PyQt5.QtSerialPort \
+      --nofollow-import-to=PyQt5.QtXml \
+      --nofollow-import-to=PyQt5.QtXmlPatterns \
+      --nofollow-import-to=PyQt5.QtSensors \
+      --nofollow-import-to=PyQt5.QtBluetooth \
+      --nofollow-import-to=PyQt5.QtNfc \
+      --nofollow-import-to=PyQt5.QtLocation \
+      --nofollow-import-to=PyQt5.QtPositioning \
+      --nofollow-import-to=PyQt5.QtHelp \
+      --nofollow-import-to=PyQt5.QtDesigner \
+      --nofollow-import-to=PyQt5.QtWebChannel \
+      --nofollow-import-to=PyQt5.QtWebSockets \
+      --output-dir=build_nuitka \
+      --remove-output \
+      echo_interface.py
