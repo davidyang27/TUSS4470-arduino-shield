@@ -180,20 +180,6 @@ def get_serial_ports():
     return ports if ports else ["No Ports"]
 
 
-def sonar_display_pipeline_optimized(raw_line, tvg_curve):
-    line = raw_line.astype(np.float32) * DISPLAY_GAIN
-    np.clip(line, 0, 255, out=line)
-
-    if len(line) > DESPECKLE_WINDOW:
-        kernel = np.ones(DESPECKLE_WINDOW) / DESPECKLE_WINDOW
-        local_mean = np.convolve(line, kernel, mode="same")
-        mask = (line > (local_mean + DESPECKLE_THRESHOLD)) & (
-            local_mean < DESPECKLE_THRESHOLD
-        )
-        line[mask] = 0
-
-    return np.clip(line, 0, 255).astype(np.uint8)
-
 
 # --- [修改] 資料錄製執行緒 (支援自動分檔 + 序列命名) ---
 class DataRecorder(QThread):
@@ -1447,42 +1433,77 @@ class WaterfallApp(QMainWindow):
         if self.latest_frame_data is None:
             return
 
+        # 1. 取得資料
         raw_data = self.latest_frame_data
         depth_index, drive_frequency, override_idx = self.latest_frame_meta
 
+        # 2. 處理解析度變化 (Resize buffer if needed)
         if len(raw_data) != self.current_max_samples:
             if abs(len(raw_data) - self.current_max_samples) > 0:
                 self.current_max_samples = len(raw_data)
+                # 重置瀑布圖緩衝區
                 self.data = np.zeros((MAX_ROWS, self.current_max_samples))
-                self.tvg_curve = np.linspace(
-                    1.0, TVG_STRENGTH, self.current_max_samples
-                )
+                # 重置深度線歷史
                 self.depth_history = np.full(MAX_ROWS, np.nan)
                 self.depth_line.setData(
                     x=np.arange(MAX_ROWS), y=self.depth_history, connect="finite"
                 )
+                # 注意：這裡不再需要重新計算 self.tvg_curve，因為我們移除了 TVG
 
-        filtered = sonar_display_pipeline_optimized(raw_data, self.tvg_curve)
-
+        # ============================================================
+        # [修改開始] 簡化繪圖邏輯 & 動態 Colorbar
+        # ============================================================
+        
+        # 3. 更新瀑布圖數據 (Rolling Buffer)
+        # 移除舊的第一行，將資料往上移
         self.data = np.roll(self.data, -1, axis=0)
-        self.data[-1, :] = filtered
-        self.imageitem.setImage(self.data.T, autoLevels=False)
-        self.imageitem.setLevels((10, 220))
+        
+        # 直接填入 Raw Data (不經過 display_pipeline 的繁重運算)
+        # 這裡會自動將 uint8 轉為 float (因為 self.data 初始化為 float)
+        self.data[-1, :] = raw_data
 
+        # 4. 繪製影像
+        # autoLevels=False 確保我們可以自己控制對比度
+        self.imageitem.setImage(self.data.T, autoLevels=False)
+
+        # 5. [關鍵] 動態調整 Colorbar (Auto Levels based on Statistics)
+        # 計算目前畫面上所有數據的 標準差(sigma) 和 平均值(mean)
+        # 這能讓訊號在不同強弱環境下都能清晰顯示
+        sigma = np.std(self.data)
+        mean = np.mean(self.data)
+        
+        # 避免 sigma 為 0 (全黑或全白時) 導致錯誤
+        if sigma == 0:
+            sigma = 1
+            
+        # 設定顯示範圍：平均值 ± 2倍標準差
+        # 這樣可以濾掉大部分背景雜訊，並突顯主要訊號
+        self.imageitem.setLevels((mean - 2 * sigma, mean + 2 * sigma))
+
+        # ============================================================
+        # [修改結束] 以下維持原本的深度線與文字更新邏輯
+        # ============================================================
+
+        # 6. 計算與顯示深度資訊
         depth_m = (depth_index * SAMPLE_RESOLUTION) / 100.0
         ovr_m = (override_idx * SAMPLE_RESOLUTION) / 100.0
 
+        # 判斷深度是否可靠 (Blind Zone & Consistency Check)
         not_blind = depth_index > PYTHON_IGNORE_INDEX
         diff = abs(int(depth_index) - int(override_idx))
         is_consistent = diff <= INDEX_TOLERANCE
         is_reliable = not_blind and is_consistent
+        
+        # 決定要畫的深度點
         target_depth_idx = (
             depth_index if self.depth_line_mode == "Auto" else override_idx
         )
         val_to_plot = target_depth_idx if is_reliable else np.nan
 
+        # 7. 更新深度線 (紅色線)
         self.depth_history = np.roll(self.depth_history, -1)
         self.depth_history[-1] = val_to_plot
+        
         if self.show_depth_line:
             self.depth_line.setData(
                 x=np.arange(MAX_ROWS), y=self.depth_history, connect="finite"
@@ -1491,6 +1512,7 @@ class WaterfallApp(QMainWindow):
         else:
             self.depth_line.hide()
 
+        # 8. 更新左上角大字體深度顯示
         if self.large_depth_visible:
             color_hex = "#FFFFFF" if is_reliable else "rgba(255, 255, 255, 0.2)"
             display_val_m = (target_depth_idx * SAMPLE_RESOLUTION) / 100.0
@@ -1498,8 +1520,11 @@ class WaterfallApp(QMainWindow):
             html_str = f"""<div style="text-align: left; line-height: 90%; font-family: 'Malgun Gothic';"><span style="font-size: {OVERLAY_FONT_L}pt; font-weight: 600; color: {color_hex};">{display_val_m:.1f}</span><span style="font-size: {OVERLAY_FONT_M}pt; font-weight: 600; color: {color_hex};">m</span><br><span style="font-size: {OVERLAY_FONT_S}pt; color: #cccccc; font-weight: 600;">{freq_text}</span></div>"""
             self.depth_overlay.setHtml(html_str)
 
+        # 9. 更新底部狀態列文字
         self.lbl_footer_depth.setText(f"Depth: {depth_m * 100:.0f} cm")
         self.lbl_footer_ovr.setText(f"Override: {ovr_m * 100:.0f} cm")
+        
+        # 清除快取，準備接收下一幀
         self.latest_frame_data = None
 
     # [修改] 這是唯一負責計算與更新系統狀態的地方 (每秒執行)
