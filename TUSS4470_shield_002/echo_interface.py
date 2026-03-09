@@ -11,7 +11,6 @@ import numpy as np
 import serial
 import serial.tools.list_ports
 
-
 # 嘗試匯入 PyQt5，失敗則提示
 try:
     from PyQt5.QtWidgets import (
@@ -141,7 +140,6 @@ def read_packet(ser):
 
     try:
         # 解包順序對應 Arduino Header 結構
-        # Arduino: start(1), depth(2), drive_freq(2), vDrv(2), num_samples(2)
         _, depth, drive_freq, v_drv_scaled, num_samples = struct.unpack(
             "<BHhHH", header_bytes
         )
@@ -178,7 +176,7 @@ def get_serial_ports():
     return ports if ports else ["No Ports"]
 
 
-# --- 資料錄製執行緒 (支援自動分檔 + 序列命名) ---
+# --- 資料錄製執行緒 ---
 class DataRecorder(QThread):
     def __init__(self):
         super().__init__()
@@ -536,7 +534,6 @@ class SettingsDialog(QDialog):
         self.cycles_combo.addItems(CYCLES_OPTIONS)
         self.cycles_combo.setCurrentText(str(self.main_app.current_cycles))
 
-        # [修改] 加入 Mode 選擇
         self.blind_input = QLineEdit(str(self.main_app.blind_zone_val))
         
         self.mode_combo = QComboBox()
@@ -565,7 +562,7 @@ class SettingsDialog(QDialog):
         
         scroll_layout.addWidget(sonar_group)
 
-        # 3. DISPLAY Group
+        # 3. DISPLAY Group (選項已統整)
         disp_group = QGroupBox("DISPLAY")
         disp_layout = QFormLayout(disp_group)
         disp_layout.setContentsMargins(5, 5, 5, 5)
@@ -573,14 +570,20 @@ class SettingsDialog(QDialog):
         
         self.large_depth_checkbox = QCheckBox("Show Depth")
         self.large_depth_checkbox.setChecked(self.main_app.large_depth_visible)
+        
+        # 統一的三個選項
+        combo_items = ["Combination (Auto+Max)", "Threshold Only (Auto)", "Override Only (Max)"]
+        
         self.overlay_mode_combo = QComboBox()
-        self.overlay_mode_combo.addItems(["Auto (Threshold)", "Override (Max)"])
-        self.overlay_mode_combo.setCurrentIndex(0 if self.main_app.depth_overlay_mode == "Auto" else 1)
+        self.overlay_mode_combo.addItems(combo_items)
+        self.overlay_mode_combo.setCurrentText(self.main_app.depth_overlay_mode)
+        
         self.show_line_checkbox = QCheckBox("Show Depth Profile")
         self.show_line_checkbox.setChecked(self.main_app.show_depth_line)
+        
         self.line_mode_combo = QComboBox()
-        self.line_mode_combo.addItems(["Follow Auto", "Follow Override"])
-        self.line_mode_combo.setCurrentIndex(0 if self.main_app.depth_line_mode == "Auto" else 1)
+        self.line_mode_combo.addItems(combo_items)
+        self.line_mode_combo.setCurrentText(self.main_app.depth_line_mode)
 
         disp_layout.addRow(self.large_depth_checkbox)
         l_src = QLabel("Src:")
@@ -729,7 +732,6 @@ class SettingsDialog(QDialog):
         new_cycles = int(self.cycles_combo.currentText())
         self.main_app.current_cycles = new_cycles
         
-        # [修改] 儲存變數並套用到 Arduino
         try:
             val_cm = int(self.blind_input.text())
             if val_cm < 0: val_cm = 0
@@ -746,11 +748,15 @@ class SettingsDialog(QDialog):
 
         self.main_app.large_depth_visible = self.large_depth_checkbox.isChecked()
         self.main_app.depth_overlay.setVisible(self.main_app.large_depth_visible)
-        self.main_app.depth_overlay_mode = "Auto" if self.overlay_mode_combo.currentIndex() == 0 else "Override"
+        
+        # 儲存顯示與測繪的模式設定
+        self.main_app.depth_overlay_mode = self.overlay_mode_combo.currentText()
         self.main_app.show_depth_line = self.show_line_checkbox.isChecked()
-        self.main_app.depth_line_mode = "Auto" if self.line_mode_combo.currentIndex() == 0 else "Override"
+        self.main_app.depth_line_mode = self.line_mode_combo.currentText()
+        
         if not self.main_app.show_depth_line:
             self.main_app.depth_line.hide()
+            
         port = int(self.nmea_port_input.text()) if self.nmea_port_input.text().isdigit() else 10110
         self.main_app.configure_nmea_output(self.nmea_checkbox.isChecked(), port)
         self.close()
@@ -777,9 +783,11 @@ class WaterfallApp(QMainWindow):
         self.nmea_output_enabled = False
         self.nmea_port = 10110
         self.large_depth_visible = True
-        self.depth_overlay_mode = "Auto"
+        
+        # 預設為 Combination
+        self.depth_overlay_mode = "Combination (Auto+Max)"
         self.show_depth_line = True
-        self.depth_line_mode = "Auto"
+        self.depth_line_mode = "Combination (Auto+Max)"
         self.current_gradient = "cyclic"
 
         self.current_speed = SPEED_OF_SOUND
@@ -792,7 +800,7 @@ class WaterfallApp(QMainWindow):
 
         self.current_cycles = 16
         self.blind_zone_val = 30
-        self.operating_mode = 2 # 0: 40kHz, 1: 200kHz, 2: Dual
+        self.operating_mode = 1 # 0: 40kHz, 1: 200kHz, 2: Dual
 
         self.tvg_curve = np.linspace(1.0, TVG_STRENGTH, self.current_max_samples)
 
@@ -913,14 +921,6 @@ class WaterfallApp(QMainWindow):
         self.stat_timer.timeout.connect(self.update_system_stats)
         self.stat_timer.start()
 
-        # ==========================================
-        # [關鍵修改] 註解掉/刪除舊有的 QTimer 更新機制
-        # ==========================================
-        # self.update_timer = QTimer()
-        # self.update_timer.setInterval(1000 // FPS_LIMIT)
-        # self.update_timer.timeout.connect(self.update_plot_from_buffer)
-        # self.update_timer.start()
-
         self.colorbar = pg.HistogramLUTWidget()
         self.colorbar.setImageItem(self.imageitem)
         try:
@@ -1034,11 +1034,7 @@ class WaterfallApp(QMainWindow):
         if self.serial_thread and self.serial_thread.isRunning():
             val = int(delay_us)
             
-            # [關鍵修改] 將公分換算成點數 (Index)
-            # 點數 = 目標公分 / 每點代表的公分
             calculated_index = int(self.blind_zone_val / SAMPLE_RESOLUTION)
-            
-            # 安全保護：Arduino 的 blind 變數是 byte，最大只能接收 255
             if calculated_index > 255:
                 calculated_index = 255
                 print(f"[Warning] Blind zone index clamped to 255 (Requested {self.blind_zone_val}cm is too deep)")
@@ -1046,8 +1042,6 @@ class WaterfallApp(QMainWindow):
                 calculated_index = 0
                 
             print(f"[System] Blind Zone: {self.blind_zone_val} cm -> {calculated_index} points")
-
-            # 傳送 5 bytes (Cmd, Delay, Cycles, 換算後的點數, Mode)
             cmd = struct.pack("BBBBB", ord("D"), val, int(self.current_cycles), calculated_index, int(self.operating_mode))
             self.serial_thread.send_raw_command(cmd)
             
@@ -1116,56 +1110,115 @@ class WaterfallApp(QMainWindow):
     def zoom_in(self):
         min_total_depth_m = MIN_VIEW_METERS_AIR if self.current_speed == AIR_SPEED else MIN_VIEW_METERS_WATER
         min_allowed_samples = (min_total_depth_m * 100.0) / SAMPLE_RESOLUTION
-        next_samples = self.current_zoom_samples - 200
-        if next_samples < min_allowed_samples:
+        
+        # [修改] 改用「比例縮放」，每次減少 20% 的視野 (等於放大畫面)
+        next_samples = self.current_zoom_samples * 0.8
+        
+        if next_samples <= min_allowed_samples:
+            # 如果已經到達或非常接近極限，就直接 return 不做事
+            # 這樣 Y 軸就不會發生無意義的重繪
+            if abs(self.current_zoom_samples - min_allowed_samples) < 1.0:
+                return 
             self.current_zoom_samples = min_allowed_samples
         else:
             self.current_zoom_samples = next_samples
+            
         self.update_zoom_range()
 
     def zoom_out(self):
-        step = 200
-        self.current_zoom_samples = min(self.current_max_samples, self.current_zoom_samples + step)
+        # 避免到達最大值時重複觸發
+        if self.current_zoom_samples >= self.current_max_samples:
+            if self.current_zoom_samples != self.current_max_samples:
+                self.current_zoom_samples = self.current_max_samples
+                self.update_zoom_range()
+            return
+            
+        # [修改] 每次擴大 25% 視野 (對應 0.8 的反向操作)
+        next_samples = self.current_zoom_samples * 1.25
+        
+        if next_samples >= self.current_max_samples:
+            self.current_zoom_samples = self.current_max_samples
+        else:
+            self.current_zoom_samples = next_samples
+            
         self.update_zoom_range()
 
     def update_zoom_range(self):
         pad_top = self.current_zoom_samples * 0.02
         pad_bottom = self.current_zoom_samples * 0.02
-        self.waterfall.setYRange(-pad_top, self.current_zoom_samples + pad_bottom)
+        self.waterfall.setYRange(-pad_top, self.current_zoom_samples + pad_bottom, padding=0)
+        
         overlay_pos = self.current_zoom_samples - (self.current_zoom_samples * 0.05)
         self.depth_overlay.setPos(10, overlay_pos)
 
         total_depth_m = (self.current_zoom_samples * SAMPLE_RESOLUTION) / 100.0
-        step_m = total_depth_m / 4.0
-        tick_depths = [i * step_m for i in range(5)]
+        
+        # -------------------------------------------------------------
+        # [新增] Nice Number 演算法：尋找最完美的整數間距 (0.1, 0.2, 0.5, 1, 2...)
+        # -------------------------------------------------------------
+        raw_step = total_depth_m / 4.0
+        if raw_step <= 0:
+            raw_step = 0.1
+            
+        magnitude = 10 ** np.floor(np.log10(raw_step))
+        rel = raw_step / magnitude
+        
+        if rel < 1.5:
+            nice_step_m = 1.0 * magnitude
+        elif rel < 3.5:
+            nice_step_m = 2.0 * magnitude
+        elif rel < 7.5:
+            nice_step_m = 5.0 * magnitude
+        else:
+            nice_step_m = 10.0 * magnitude
 
+        # 根據漂亮的間距，生成刻度陣列
+        tick_depths = []
+        current_d = 0.0
+        while current_d <= total_depth_m * 1.01: # 給予 1% 的容差避免漏掉最後一條線
+            tick_depths.append(current_d)
+            current_d += nice_step_m
+
+        # 動態決定小數點位數 (避免整數時還顯示 .0，或者刻度太小時小數點不夠)
+        if nice_step_m >= 1.0:
+            fmt = "{:.0f}"
+        elif nice_step_m >= 0.1:
+            fmt = "{:.1f}"
+        else:
+            fmt = "{:.2f}"
+
+        # 將公尺換算回點數以供繪圖
         ticks = []
-        fmt = "{:.1f}" if step_m < 1 else "{:.1f}"
         for d in tick_depths:
             idx = (d * 100.0) / SAMPLE_RESOLUTION
             ticks.append((idx, fmt.format(d)))
+
+        # -------------------------------------------------------------
 
         ax = self.waterfall.getAxis("right")
         ax.setTicks([ticks])
         ax.setTickFont(QFont("Arial", AXIS_FONT_SIZE))
 
+        # 移除舊的虛線並畫上新的
         for item in self.waterfall.items():
             if isinstance(item, pg.InfiniteLine) and item != self.depth_line:
                 self.waterfall.removeItem(item)
+                
         for idx, label in ticks:
-            if idx > 0:
+            # 確保不會畫到畫面外面
+            if 0 < idx < self.current_zoom_samples: 
                 line = pg.InfiniteLine(
                     pos=idx, angle=0, pen=pg.mkPen(color=(150, 150, 150, 150), style=Qt.DashLine)
                 )
                 self.waterfall.addItem(line)
 
+        # 確保初始覆疊文字存在
         color_hex = "#FFFFFF"
         display_val_m = 0.0
         freq_text = f"&nbsp;&nbsp;{40}kHz"
         html_str = f"""<div style="text-align: left; line-height: 90%; font-family: 'Malgun Gothic';"><span style="font-size: {OVERLAY_FONT_L}pt; font-weight: 600; color: {color_hex};">{display_val_m:.1f}</span><span style="font-size: {OVERLAY_FONT_M}pt; font-weight: 600; color: {color_hex};">m</span><br><span style="font-size: {OVERLAY_FONT_S}pt; color: #cccccc; font-weight: 600;">{freq_text}</span></div>"""
         self.depth_overlay.setHtml(html_str)
 
-    # --- 接收資料與立刻畫圖 ---
     def on_packet_received(self, packet):
         self.latest_frame_data = packet[0]
         self.latest_frame_meta = packet[1:]
@@ -1178,7 +1231,6 @@ class WaterfallApp(QMainWindow):
                 self.current_temp, self.current_fan_rpm
             )
 
-        # [關鍵修改] 不用等 Timer，資料一到立刻更新畫面，確保交替畫圖
         self.update_plot_from_buffer()
 
     def update_plot_from_buffer(self):
@@ -1211,16 +1263,46 @@ class WaterfallApp(QMainWindow):
         depth_m = (depth_index * SAMPLE_RESOLUTION) / 100.0
         ovr_m = (override_idx * SAMPLE_RESOLUTION) / 100.0
 
+        # 基本的盲區過濾
         not_blind = depth_index > PYTHON_IGNORE_INDEX
         diff = abs(int(depth_index) - int(override_idx))
-        is_consistent = diff <= INDEX_TOLERANCE
-        is_reliable = not_blind and is_consistent
         
-        target_depth_idx = depth_index if self.depth_line_mode == "Auto" else override_idx
-        val_to_plot = target_depth_idx if is_reliable else np.nan
+        # --- 判斷資料來源與可靠性 ---
+        
+        # 1. 決定要在「文字」上顯示什麼
+        overlay_target_idx = np.nan
+        overlay_reliable = False
+        
+        if self.depth_overlay_mode == "Combination (Auto+Max)":
+            if not_blind and diff <= INDEX_TOLERANCE:
+                overlay_target_idx = depth_index
+                overlay_reliable = True
+        elif self.depth_overlay_mode == "Threshold Only (Auto)":
+            if not_blind:
+                overlay_target_idx = depth_index
+                overlay_reliable = True
+        elif self.depth_overlay_mode == "Override Only (Max)":
+            # Override 通常不受硬體盲區影響，但我們還是加個基本判斷
+            if override_idx > PYTHON_IGNORE_INDEX: 
+                overlay_target_idx = override_idx
+                overlay_reliable = True
 
+        # 2. 決定要在「折線圖」上畫什麼
+        line_target_idx = np.nan
+        
+        if self.depth_line_mode == "Combination (Auto+Max)":
+            if not_blind and diff <= INDEX_TOLERANCE:
+                line_target_idx = depth_index
+        elif self.depth_line_mode == "Threshold Only (Auto)":
+            if not_blind:
+                line_target_idx = depth_index
+        elif self.depth_line_mode == "Override Only (Max)":
+            if override_idx > PYTHON_IGNORE_INDEX:
+                line_target_idx = override_idx
+
+        # 更新折線圖歷史紀錄
         self.depth_history = np.roll(self.depth_history, -1)
-        self.depth_history[-1] = val_to_plot
+        self.depth_history[-1] = line_target_idx
         
         if self.show_depth_line:
             self.depth_line.setData(
@@ -1230,13 +1312,21 @@ class WaterfallApp(QMainWindow):
         else:
             self.depth_line.hide()
 
+        # 更新大字體顯示
         if self.large_depth_visible:
-            color_hex = "#FFFFFF" if is_reliable else "rgba(255, 255, 255, 0.2)"
-            display_val_m = (target_depth_idx * SAMPLE_RESOLUTION) / 100.0
+            color_hex = "#FFFFFF" if overlay_reliable else "rgba(255, 255, 255, 0.2)"
+            
+            # 如果是 nan，顯示 0.0，不然轉換成公尺
+            if np.isnan(overlay_target_idx):
+                display_val_m = 0.0
+            else:
+                display_val_m = (overlay_target_idx * SAMPLE_RESOLUTION) / 100.0
+                
             freq_text = f"&nbsp;&nbsp;{drive_frequency:.0f}kHz"
             html_str = f"""<div style="text-align: left; line-height: 90%; font-family: 'Malgun Gothic';"><span style="font-size: {OVERLAY_FONT_L}pt; font-weight: 600; color: {color_hex};">{display_val_m:.1f}</span><span style="font-size: {OVERLAY_FONT_M}pt; font-weight: 600; color: {color_hex};">m</span><br><span style="font-size: {OVERLAY_FONT_S}pt; color: #cccccc; font-weight: 600;">{freq_text}</span></div>"""
             self.depth_overlay.setHtml(html_str)
 
+        # 狀態列永遠顯示原始數據，方便除錯
         self.lbl_footer_depth.setText(f"Depth: {depth_m * 100:.0f} cm")
         self.lbl_footer_ovr.setText(f"Override: {ovr_m * 100:.0f} cm")
         
@@ -1343,7 +1433,6 @@ class WaterfallApp(QMainWindow):
             self.serial_thread.send_raw_command(cmd)
             QThread.msleep(50)
 
-            # [修改] 初始連線時也傳送包含 Mode 的 5 bytes D 指令
             val = int(self.current_sample_delay)
             calculated_index = int(self.blind_zone_val / SAMPLE_RESOLUTION)
             if calculated_index > 255: calculated_index = 255
