@@ -207,7 +207,7 @@ void loop()
     // 【高頻回合：200kHz】
     tuss4470Write(0x10, 0x1E); // BPF 設為 ~206kHz
     burstTimer.set_frequency(400000.0f); // 動態變更 Timer 頻率為 400k (達成 200kHz 方波)
-    currentToggleCount = baseCycles * 10; 
+    currentToggleCount = baseCycles * 2; 
   } else {
     // 【低頻回合：40kHz】
     tuss4470Write(0x10, 0x00); // BPF 設為 ~40.6kHz
