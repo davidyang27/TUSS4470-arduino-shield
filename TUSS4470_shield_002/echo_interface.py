@@ -40,7 +40,7 @@ except ImportError as e:
     print(f"CRITICAL ERROR: Missing libraries. {e}")
     sys.exit(1)
 
-# [新增] 引入系統監控套件
+# 引入系統監控套件
 try:
     import psutil
 except ImportError:
@@ -140,9 +140,8 @@ def read_packet(ser):
         return None
 
     try:
-        # [修改] 這裡的解包順序對應 Arduino Header 結構
+        # 解包順序對應 Arduino Header 結構
         # Arduino: start(1), depth(2), drive_freq(2), vDrv(2), num_samples(2)
-        # 格式 <BHhHH: Byte, UShort, Short, UShort, UShort
         _, depth, drive_freq, v_drv_scaled, num_samples = struct.unpack(
             "<BHhHH", header_bytes
         )
@@ -171,7 +170,6 @@ def read_packet(ser):
         return None
 
     values = np.frombuffer(payload, dtype=np.uint8, count=num_samples)
-    # 回傳: Raw Data, 深度索引, 驅動頻率, 閾值索引
     return values, min(depth, num_samples), drive_freq, float(v_drv_scaled)
 
 
@@ -180,22 +178,7 @@ def get_serial_ports():
     return ports if ports else ["No Ports"]
 
 
-def sonar_display_pipeline_optimized(raw_line, tvg_curve):
-    line = raw_line.astype(np.float32) * DISPLAY_GAIN
-    np.clip(line, 0, 255, out=line)
-
-    if len(line) > DESPECKLE_WINDOW:
-        kernel = np.ones(DESPECKLE_WINDOW) / DESPECKLE_WINDOW
-        local_mean = np.convolve(line, kernel, mode="same")
-        mask = (line > (local_mean + DESPECKLE_THRESHOLD)) & (
-            local_mean < DESPECKLE_THRESHOLD
-        )
-        line[mask] = 0
-
-    return np.clip(line, 0, 255).astype(np.uint8)
-
-
-# --- [修改] 資料錄製執行緒 (支援自動分檔 + 序列命名) ---
+# --- 資料錄製執行緒 (支援自動分檔 + 序列命名) ---
 class DataRecorder(QThread):
     def __init__(self):
         super().__init__()
@@ -203,24 +186,14 @@ class DataRecorder(QThread):
         self.running = False
         self.file_handle = None
         self.current_folder = "."
-        
-        # 用來記錄這一次錄影的 "基準名稱"
         self.session_base_name = ""
-        # 檔案序號
         self.file_sequence = 1
-        
-        # [設定] 單一檔案最大限制 (建議 500MB)
         self.max_file_size_bytes = 500 * 1024 * 1024 
 
     def start_recording(self, folder_path="."):
         self.current_folder = folder_path
-        
-        # 1. 產生這一次錄影的 "唯一基準名稱" (Session ID)
-        # 例如: sonar_log_20260202_120000
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         self.session_base_name = f"sonar_log_{timestamp}"
-        
-        # 2. 重置序號
         self.file_sequence = 1
         
         if self._open_new_file():
@@ -230,21 +203,15 @@ class DataRecorder(QThread):
         return False
 
     def _open_new_file(self):
-        """內部函式：使用基準名稱 + 序號產生新檔名"""
-        # 檔名變成: sonar_log_20260202_120000_1.bin, _2.bin ...
         filename = os.path.join(
             self.current_folder, 
             f"{self.session_base_name}_{self.file_sequence}.bin"
         )
-        
         try:
             if self.file_handle:
                 self.file_handle.close()
-            
             self.file_handle = open(filename, "wb")
             print(f"[Recorder] Writing to: {filename}")
-            
-            # 準備下一個檔案的序號
             self.file_sequence += 1
             return True
         except Exception as e:
@@ -271,25 +238,20 @@ class DataRecorder(QThread):
                 continue
 
             ts, raw_data, depth_idx, freq, sos, delay, cyc, cpu, ram, temp, fan = item
-
             try:
                 data_len = len(raw_data)
-                # Header struct: <2s d H h f f H H f f f I (42 bytes)
                 header = struct.pack(
                     "<2s d H h f f H H f f f I",
                     b"\xfe\xfe", ts, int(depth_idx), int(freq), float(sos), float(delay),
                     int(cyc), data_len, float(cpu), float(ram), float(temp), int(fan)
                 )
-
                 self.file_handle.write(header)
                 self.file_handle.write(raw_data.tobytes())
                 
-                # 檢查大小，若超過則換檔 (無縫切換)
                 if self.file_handle.tell() >= self.max_file_size_bytes:
                     self.file_handle.flush()
                     print(f"[Recorder] File limit reached ({self.max_file_size_bytes/1024/1024:.0f}MB), rotating...")
                     self._open_new_file()
-
             except Exception as e:
                 print(f"[Recorder] Write Error: {e}")
 
@@ -311,7 +273,6 @@ class BasePopup(QWidget):
         """
         )
 
-
 class ColorPopup(BasePopup):
     itemSelected = pyqtSignal(str)
 
@@ -332,13 +293,11 @@ class ColorPopup(BasePopup):
             except Exception as e:
                 print(f"[Error] {e}")
                 continue
-
         self.setFixedWidth(int(140 * UI_SCALE_FACTOR))
 
     def handle_click(self, name):
         self.itemSelected.emit(name)
         self.close()
-
 
 class RangePopup(BasePopup):
     itemSelected = pyqtSignal(float)
@@ -369,7 +328,6 @@ class RangePopup(BasePopup):
         self.itemSelected.emit(val)
         self.close()
 
-
 class CircularGauge(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -397,16 +355,13 @@ class CircularGauge(QWidget):
         if self.max_value > 0:
             ratio = self.value / self.max_value
             span = -270 * ratio * 16
-            painter.setPen(
-                QPen(self.progress_color, pen_width, Qt.SolidLine, Qt.RoundCap)
-            )
+            painter.setPen(QPen(self.progress_color, pen_width, Qt.SolidLine, Qt.RoundCap))
             painter.drawArc(rect, 225 * 16, int(span))
 
         painter.setPen(Qt.white)
         font = QFont("Malgun Gothic", GAUGE_FONT_SIZE, QFont.Bold)
         painter.setFont(font)
         painter.drawText(rect, Qt.AlignCenter, str(self.value))
-
 
 class GainGaugeWidget(QFrame):
     clicked = pyqtSignal()
@@ -440,7 +395,6 @@ class GainGaugeWidget(QFrame):
         if event.button() == Qt.LeftButton:
             self.clicked.emit()
 
-
 class SerialReader(QThread):
     packet_received = pyqtSignal(object)
 
@@ -460,9 +414,7 @@ class SerialReader(QThread):
 
     def run(self):
         try:
-            with serial.Serial(
-                self.port, self.baud_rate, timeout=0.1, write_timeout=1
-            ) as ser:
+            with serial.Serial(self.port, self.baud_rate, timeout=0.1, write_timeout=1) as ser:
                 print(f"[Serial] Connected to {self.port} at {self.baud_rate}")
                 while self.running:
                     try:
@@ -471,6 +423,7 @@ class SerialReader(QThread):
                             ser.write(cmd)
                     except Exception as e:
                         print(f"Serial Write Error: {e}")
+                    
                     result = read_packet(ser)
                     if result:
                         self.packet_received.emit(result)
@@ -486,154 +439,59 @@ class SettingsDialog(QDialog):
         super().__init__(parent)
         self.main_app = parent
         self.setWindowTitle("Config")
-        # 調整視窗大小
         self.resize(int(340 * UI_SCALE_FACTOR), int(380 * UI_SCALE_FACTOR))
         self.echo_thr_val = self.main_app.saved_echo_thr
 
         lbl_size = int(11 * UI_SCALE_FACTOR)
-        
-        # 設定統一的標籤寬度
         fixed_label_width = int(70 * UI_SCALE_FACTOR) 
-
-        # [新增] 設定滾動條寬度 (加粗，方便觸控)
-        # 35px 在觸控螢幕上是大拇指比較好操作的寬度
-        sb_width = int(20 * UI_SCALE_FACTOR)
+        sb_width = int(35 * UI_SCALE_FACTOR)
 
         self.setStyleSheet(
             f"""
             QDialog {{ background-color: #2b2b2b; color: #e0e0e0; font-family: 'Malgun Gothic', Arial; }}
-            
-            /* 通用標籤樣式 */
-            QLabel {{ 
-                color: #e0e0e0; 
-                font-weight: bold; 
-                font-size: {lbl_size}px; 
-            }}
-            
-            /* 針對 GroupBox 內的第一欄 Label 強制固定寬度 */
-            QGroupBox QLabel#fieldLabel {{
-                min-width: {fixed_label_width}px;
-                max-width: {fixed_label_width}px;
-            }}
-            
-            /* Checkbox 樣式 */
-            QCheckBox {{
-                font-size: {lbl_size}px; 
-                color: #e0e0e0;
-                font-weight: bold;
-                spacing: 5px;
-            }}
-            /* 讓 Checkbox 的點擊區域變大一點 */
-            QCheckBox::indicator {{
-                width: {int(20 * UI_SCALE_FACTOR)}px;
-                height: {int(20 * UI_SCALE_FACTOR)}px;
-            }}
-
-            /* 輸入框與下拉選單樣式 */
-            QComboBox, QLineEdit {{ 
-                background-color: #3a3a3a; 
-                border: 1px solid #555; 
-                color: white; 
-                padding: 2px 4px; 
-                border-radius: 2px; 
-                font-size: {lbl_size}px; 
-                min-height: {int(20 * UI_SCALE_FACTOR)}px; 
-            }}
+            QLabel {{ color: #e0e0e0; font-weight: bold; font-size: {lbl_size}px; }}
+            QGroupBox QLabel#fieldLabel {{ min-width: {fixed_label_width}px; max-width: {fixed_label_width}px; }}
+            QCheckBox {{ font-size: {lbl_size}px; color: #e0e0e0; font-weight: bold; spacing: 5px; }}
+            QCheckBox::indicator {{ width: {int(20 * UI_SCALE_FACTOR)}px; height: {int(20 * UI_SCALE_FACTOR)}px; }}
+            QComboBox, QLineEdit {{ background-color: #3a3a3a; border: 1px solid #555; color: white; padding: 2px 4px; border-radius: 2px; font-size: {lbl_size}px; min-height: {int(20 * UI_SCALE_FACTOR)}px; }}
             QComboBox::drop-down {{ subcontrol-origin: padding; subcontrol-position: top right; width: {int(20 * UI_SCALE_FACTOR)}px; border-left: 1px solid #555; background-color: #444; }}
             QComboBox::down-arrow {{ width: 0px; height: 0px; border-left: 4px solid transparent; border-right: 4px solid transparent; border-top: 5px solid #ffffff; margin-top: 1px; margin-right: 1px; }}
-            
-            /* 按鈕樣式 */
             QPushButton {{ background-color: #444; border: 1px solid #666; color: white; padding: 4px 8px; border-radius: 3px; font-weight: bold; font-size: {SETTINGS_FONT_SIZE}px; }}
             QPushButton:hover {{ background-color: #555; border-color: #777; }}
             QPushButton#applyBtn {{ background-color: #0078d7; border-color: #005a9e; }}
             QPushButton#applyBtn:hover {{ background-color: #006cbd; }}
-            
-            /* Quit 按鈕專用樣式 */
-            QPushButton#quitBtn {{ 
-                background-color: #aa0000; 
-                border: 1px solid #ff3333; 
-                color: white; 
-            }}
-            QPushButton#quitBtn:hover {{ 
-                background-color: #cc0000; 
-            }}
-
-            /* GroupBox 樣式 */
-            QGroupBox {{ 
-                border: 1px solid #444; 
-                border-radius: 4px; 
-                margin-top: {int(8 * UI_SCALE_FACTOR)}px;
-                padding-top: {int(12 * UI_SCALE_FACTOR)}px;
-                padding-bottom: 8px;
-                padding-left: 8px;
-                padding-right: 8px;
-                font-weight: bold; 
-                font-size: {SETTINGS_FONT_SIZE}px; 
-            }}
-            
-            QGroupBox::title {{ 
-                subcontrol-origin: margin; 
-                subcontrol-position: top left; 
-                left: 8px; 
-                padding: 0 3px; 
-                background-color: transparent; 
-                color: #00b4ff; 
-            }}
-            
+            QPushButton#quitBtn {{ background-color: #aa0000; border: 1px solid #ff3333; color: white; }}
+            QPushButton#quitBtn:hover {{ background-color: #cc0000; }}
+            QGroupBox {{ border: 1px solid #444; border-radius: 4px; margin-top: {int(8 * UI_SCALE_FACTOR)}px; padding-top: {int(12 * UI_SCALE_FACTOR)}px; padding-bottom: 8px; padding-left: 8px; padding-right: 8px; font-weight: bold; font-size: {SETTINGS_FONT_SIZE}px; }}
+            QGroupBox::title {{ subcontrol-origin: margin; subcontrol-position: top left; left: 8px; padding: 0 3px; background-color: transparent; color: #00b4ff; }}
             QScrollArea {{ border: none; background-color: transparent; }}
             QWidget#scrollContent {{ background-color: transparent; }}
-
-            /* ======================================================= */
-            /* [新增] 滾動條 (Scrollbar) 觸控優化樣式 */
-            /* ======================================================= */
-            QScrollBar:vertical {{
-                border: none;
-                background: #2b2b2b; /* 背景色跟視窗一樣，比較不突兀 */
-                width: {sb_width}px; /* 加寬 */
-                margin: 0px 0px 0px 0px;
-            }}
-            QScrollBar::handle:vertical {{
-                background: #555;    /* 拉桿顏色 (深灰) */
-                min-height: {sb_width}px;
-                border-radius: 4px;  /* 圓角 */
-            }}
-            QScrollBar::handle:vertical:pressed {{
-                background: #0078d7; /* 按下變藍色 */
-            }}
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
-                height: 0px;         /* 隱藏上下箭頭，增加觸控滑動空間 */
-            }}
-            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
-                background: none;    /* 點擊空白處的背景 */
-            }}
+            QScrollBar:vertical {{ border: none; background: #2b2b2b; width: {sb_width}px; margin: 0px 0px 0px 0px; }}
+            QScrollBar::handle:vertical {{ background: #555; min-height: {sb_width}px; border-radius: 4px; }}
+            QScrollBar::handle:vertical:pressed {{ background: #0078d7; }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0px; }}
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{ background: none; }}
         """
         )
 
-        # 以下程式碼維持不變...
         main_layout = QVBoxLayout(self)
-        # ... (後面的程式碼完全不用動) ...
         main_layout.setContentsMargins(5, 5, 5, 5)
         main_layout.setSpacing(5)
         
-        # 使用 ScrollArea 防止小螢幕顯示不全
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll_content = QWidget()
         scroll_content.setObjectName("scrollContent")
         
-        # 這裡改用 QVBoxLayout 管理所有 GroupBox
         scroll_layout = QVBoxLayout(scroll_content)
-        scroll_layout.setSpacing(int(8 * UI_SCALE_FACTOR)) # Block 之間的距離縮小
+        scroll_layout.setSpacing(int(8 * UI_SCALE_FACTOR))
         scroll_layout.setContentsMargins(2, 2, 2, 2)
 
-        # ==========================================
         # 1. Connection Group
-        # ==========================================
         conn_group = QGroupBox("CONNECTION")
-        # 使用 GridLayout 來確保對齊
         conn_layout = QFormLayout(conn_group)
         conn_layout.setContentsMargins(5, 5, 5, 5)
-        conn_layout.setVerticalSpacing(int(5 * UI_SCALE_FACTOR)) # 行距縮小
+        conn_layout.setVerticalSpacing(int(5 * UI_SCALE_FACTOR))
         conn_layout.setLabelAlignment(Qt.AlignLeft)
         
         self.serial_combo = QComboBox()
@@ -647,32 +505,23 @@ class SettingsDialog(QDialog):
         if index >= 0:
             self.res_combo.setCurrentIndex(index)
 
-        # 加入帶有 objectName="fieldLabel" 的 Label 以便 CSS 對齊
         l1 = QLabel("Port:")
         l1.setObjectName("fieldLabel")
         conn_layout.addRow(l1, self.serial_combo)
-        
         l2 = QLabel("Samples:")
         l2.setObjectName("fieldLabel")
         conn_layout.addRow(l2, self.res_combo)
-
         scroll_layout.addWidget(conn_group)
 
-        # ==========================================
         # 2. SONAR Group
-        # ==========================================
         sonar_group = QGroupBox("SONAR")
         sonar_layout = QFormLayout(sonar_group)
         sonar_layout.setContentsMargins(5, 5, 5, 5)
         sonar_layout.setVerticalSpacing(int(5 * UI_SCALE_FACTOR))
 
         self.speed_dropdown = QComboBox()
-        self.speed_dropdown.addItems(
-            [f"{AIR_SPEED} m/s (Air)", f"{WATER_SPEED} m/s (Water)"]
-        )
-        self.speed_dropdown.setCurrentIndex(
-            1 if self.main_app.current_speed == WATER_SPEED else 0
-        )
+        self.speed_dropdown.addItems([f"{AIR_SPEED} m/s (Air)", f"{WATER_SPEED} m/s (Water)"])
+        self.speed_dropdown.setCurrentIndex(1 if self.main_app.current_speed == WATER_SPEED else 0)
 
         self.delay_combo = QComboBox()
         for label, val in SPEED_OPTIONS:
@@ -687,6 +536,13 @@ class SettingsDialog(QDialog):
         self.cycles_combo.addItems(CYCLES_OPTIONS)
         self.cycles_combo.setCurrentText(str(self.main_app.current_cycles))
 
+        # [修改] 加入 Mode 選擇
+        self.blind_input = QLineEdit(str(self.main_app.blind_zone_val))
+        
+        self.mode_combo = QComboBox()
+        self.mode_combo.addItems(["40kHz Only", "200kHz Only", "Dual (40k/200k)"])
+        self.mode_combo.setCurrentIndex(self.main_app.operating_mode)
+        
         l_env = QLabel("Env:")
         l_env.setObjectName("fieldLabel")
         sonar_layout.addRow(l_env, self.speed_dropdown)
@@ -699,11 +555,17 @@ class SettingsDialog(QDialog):
         l_cyc.setObjectName("fieldLabel")
         sonar_layout.addRow(l_cyc, self.cycles_combo)
         
+        l_blind = QLabel("Blind:")
+        l_blind.setObjectName("fieldLabel")
+        sonar_layout.addRow(l_blind, self.blind_input)
+        
+        l_mode = QLabel("Mode:")
+        l_mode.setObjectName("fieldLabel")
+        sonar_layout.addRow(l_mode, self.mode_combo)
+        
         scroll_layout.addWidget(sonar_group)
 
-        # ==========================================
         # 3. DISPLAY Group
-        # ==========================================
         disp_group = QGroupBox("DISPLAY")
         disp_layout = QFormLayout(disp_group)
         disp_layout.setContentsMargins(5, 5, 5, 5)
@@ -711,41 +573,26 @@ class SettingsDialog(QDialog):
         
         self.large_depth_checkbox = QCheckBox("Show Depth")
         self.large_depth_checkbox.setChecked(self.main_app.large_depth_visible)
-        
         self.overlay_mode_combo = QComboBox()
         self.overlay_mode_combo.addItems(["Auto (Threshold)", "Override (Max)"])
-        self.overlay_mode_combo.setCurrentIndex(
-            0 if self.main_app.depth_overlay_mode == "Auto" else 1
-        )
+        self.overlay_mode_combo.setCurrentIndex(0 if self.main_app.depth_overlay_mode == "Auto" else 1)
         self.show_line_checkbox = QCheckBox("Show Depth Profile")
         self.show_line_checkbox.setChecked(self.main_app.show_depth_line)
         self.line_mode_combo = QComboBox()
         self.line_mode_combo.addItems(["Follow Auto", "Follow Override"])
-        self.line_mode_combo.setCurrentIndex(
-            0 if self.main_app.depth_line_mode == "Auto" else 1
-        )
+        self.line_mode_combo.setCurrentIndex(0 if self.main_app.depth_line_mode == "Auto" else 1)
 
-        # Checkbox 行 (跨欄)
         disp_layout.addRow(self.large_depth_checkbox)
-        
-        # 帶 Label 的行
         l_src = QLabel("Src:")
         l_src.setObjectName("fieldLabel")
         disp_layout.addRow(l_src, self.overlay_mode_combo)
-        
-        # Checkbox 行 (跨欄)
         disp_layout.addRow(self.show_line_checkbox)
-        
-        # 帶 Label 的行
         l_line = QLabel("Line:")
         l_line.setObjectName("fieldLabel")
         disp_layout.addRow(l_line, self.line_mode_combo)
-        
         scroll_layout.addWidget(disp_group)
 
-        # ==========================================
         # 4. NMEA Group
-        # ==========================================
         nmea_group = QGroupBox("NMEA TCP")
         nmea_layout = QFormLayout(nmea_group)
         nmea_layout.setContentsMargins(5, 5, 5, 5)
@@ -758,97 +605,73 @@ class SettingsDialog(QDialog):
         l_on = QLabel("On:")
         l_on.setObjectName("fieldLabel")
         nmea_layout.addRow(l_on, self.nmea_checkbox)
-        
         l_port = QLabel("Port:")
         l_port.setObjectName("fieldLabel")
         nmea_layout.addRow(l_port, self.nmea_port_input)
-        
         scroll_layout.addWidget(nmea_group)
 
-        # ==========================================
-        # 5. REGISTER Group (Layout 重構)
-        # ==========================================
+        # 5. REGISTER Group
         reg_group = QGroupBox("REGISTER")
-        # 改用 GridLayout 來精準控制對齊
         reg_layout = QFormLayout(reg_group) 
         reg_layout.setContentsMargins(5, 5, 5, 5)
-        reg_layout.setVerticalSpacing(int(10 * UI_SCALE_FACTOR)) # 按鈕區稍微寬鬆一點
+        reg_layout.setVerticalSpacing(int(10 * UI_SCALE_FACTOR))
         
-        # Row 1: Echo Thr 控制項 (包成一個 Widget)
         echo_container = QWidget()
         echo_hbox = QHBoxLayout(echo_container)
         echo_hbox.setContentsMargins(0, 0, 0, 0)
         echo_hbox.setSpacing(5)
-        
         self.btn_echo_minus = QPushButton("-")
         self.btn_echo_minus.setFixedSize(int(25 * UI_SCALE_FACTOR), int(20 * UI_SCALE_FACTOR))
         self.btn_echo_minus.clicked.connect(self.decrease_echo_thr)
-        
         self.lbl_echo_val = QLabel(str(self.echo_thr_val))
         self.lbl_echo_val.setAlignment(Qt.AlignCenter)
-        # 數字標籤不需要 min-width，或者是固定小一點
         self.lbl_echo_val.setFixedWidth(int(25 * UI_SCALE_FACTOR))
-        self.lbl_echo_val.setStyleSheet("background-color: transparent; border: none;") # 確保沒邊框
-
+        self.lbl_echo_val.setStyleSheet("background-color: transparent; border: none;")
         self.btn_echo_plus = QPushButton("+")
         self.btn_echo_plus.setFixedSize(int(25 * UI_SCALE_FACTOR), int(20 * UI_SCALE_FACTOR))
         self.btn_echo_plus.clicked.connect(self.increase_echo_thr)
-        
         self.btn_echo_send = QPushButton("Send")
         self.btn_echo_send.setCursor(Qt.PointingHandCursor)
         self.btn_echo_send.setFixedWidth(int(50 * UI_SCALE_FACTOR))
         self.btn_echo_send.clicked.connect(self.send_echo_thr_cmd)
-        
         echo_hbox.addWidget(self.btn_echo_minus)
         echo_hbox.addWidget(self.lbl_echo_val)
         echo_hbox.addWidget(self.btn_echo_plus)
-        echo_hbox.addStretch() # 把 Send 按鈕推到最右邊? 或者跟上面切齊? 
-        # 為了跟上面的輸入框右邊對齊，這裡用 addStretch 填補中間
+        echo_hbox.addStretch() 
         echo_hbox.addWidget(self.btn_echo_send)
-        
         l_thr = QLabel("Echo Thr:")
         l_thr.setObjectName("fieldLabel")
         reg_layout.addRow(l_thr, echo_container)
 
-        # Row 2: Raw Reg
         raw_container = QWidget()
         raw_hbox = QHBoxLayout(raw_container)
         raw_hbox.setContentsMargins(0, 0, 0, 0)
         raw_hbox.setSpacing(5)
-        
         self.reg_input = QLineEdit()
         self.reg_input.setPlaceholderText("Addr, Data")
-        
         self.reg_btn = QPushButton("Send")
         self.reg_btn.setCursor(Qt.PointingHandCursor)
         self.reg_btn.setFixedWidth(int(50 * UI_SCALE_FACTOR))
         self.reg_btn.clicked.connect(self.handle_reg_send)
-        
         raw_hbox.addWidget(self.reg_input)
         raw_hbox.addWidget(self.reg_btn)
-        
         l_raw = QLabel("Raw Reg:")
         l_raw.setObjectName("fieldLabel")
         reg_layout.addRow(l_raw, raw_container)
 
         scroll_layout.addWidget(reg_group)
-        
-        # [修改] 這裡加入一個大一點的 spacer，把 Quit 按鈕推到底部
         scroll_layout.addStretch(1) 
         
-        # [新增] Quit Button 
         quit_btn = QPushButton("QUIT APPLICATION")
-        quit_btn.setObjectName("quitBtn") # 設定 ID 以便 CSS 上色
+        quit_btn.setObjectName("quitBtn")
         quit_btn.setCursor(Qt.PointingHandCursor)
         quit_btn.setFixedHeight(int(35 * UI_SCALE_FACTOR))
-        # 點擊後執行主程式的 close() 來關閉整個應用程式
         quit_btn.clicked.connect(self.handle_quit_app)
         scroll_layout.addWidget(quit_btn)
         
         scroll.setWidget(scroll_content)
         main_layout.addWidget(scroll)
 
-        # Bottom Buttons (Apply / Cancel)
         btn_layout = QHBoxLayout()
         btn_layout.setContentsMargins(5, 5, 5, 5)
         apply_btn = QPushButton("Apply")
@@ -872,17 +695,12 @@ class SettingsDialog(QDialog):
             self.lbl_echo_val.setText(str(self.echo_thr_val))
 
     def send_echo_thr_cmd(self):
-        if (
-            not self.main_app.serial_thread
-            or not self.main_app.serial_thread.isRunning()
-        ):
+        if not self.main_app.serial_thread or not self.main_app.serial_thread.isRunning():
             return print("[System] Not connected.")
         data = (self.echo_thr_val - 1) | 0x10
         addr = 0x17
         try:
-            self.main_app.serial_thread.send_raw_command(
-                struct.pack("BBB", ord("W"), addr, data)
-            )
+            self.main_app.serial_thread.send_raw_command(struct.pack("BBB", ord("W"), addr, data))
             self.main_app.saved_echo_thr = self.echo_thr_val
             print(f"[System] Echo Thr Sent: {self.echo_thr_val}")
         except Exception as e:
@@ -890,25 +708,19 @@ class SettingsDialog(QDialog):
 
     def handle_reg_send(self):
         txt = self.reg_input.text().strip()
-        if (
-            not self.main_app.serial_thread
-            or not self.main_app.serial_thread.isRunning()
-        ):
+        if not self.main_app.serial_thread or not self.main_app.serial_thread.isRunning():
             return print("[System] Not connected.")
         if "," not in txt:
             return print("[System] Format Error")
         try:
             addr, data = [int(x.strip(), 16) for x in txt.split(",")]
-            self.main_app.serial_thread.send_raw_command(
-                struct.pack("BBB", ord("W"), addr, data)
-            )
+            self.main_app.serial_thread.send_raw_command(struct.pack("BBB", ord("W"), addr, data))
             print(f"[System] Sent: Addr={hex(addr)}, Data={hex(data)}")
         except Exception as e:
             print(f"[System] Error: {e}")
 
     def handle_apply(self):
         self.main_app.serial_port_name = self.serial_combo.currentText()
-
         new_samples = int(self.res_combo.currentText())
         if new_samples != self.main_app.current_max_samples:
             self.main_app.change_resolution(new_samples)
@@ -916,7 +728,17 @@ class SettingsDialog(QDialog):
         new_delay = self.delay_combo.currentData()
         new_cycles = int(self.cycles_combo.currentText())
         self.main_app.current_cycles = new_cycles
+        
+        # [修改] 儲存變數並套用到 Arduino
+        try:
+            val = int(self.blind_input.text())
+            if val < 0: val = 0
+            if val > 255: val = 255 
+            self.main_app.blind_zone_val = val
+        except ValueError:
+            pass 
 
+        self.main_app.operating_mode = self.mode_combo.currentIndex()
         self.main_app.set_sample_delay(new_delay)
 
         speed = AIR_SPEED if self.speed_dropdown.currentIndex() == 0 else WATER_SPEED
@@ -925,27 +747,18 @@ class SettingsDialog(QDialog):
 
         self.main_app.large_depth_visible = self.large_depth_checkbox.isChecked()
         self.main_app.depth_overlay.setVisible(self.main_app.large_depth_visible)
-        self.main_app.depth_overlay_mode = (
-            "Auto" if self.overlay_mode_combo.currentIndex() == 0 else "Override"
-        )
+        self.main_app.depth_overlay_mode = "Auto" if self.overlay_mode_combo.currentIndex() == 0 else "Override"
         self.main_app.show_depth_line = self.show_line_checkbox.isChecked()
-        self.main_app.depth_line_mode = (
-            "Auto" if self.line_mode_combo.currentIndex() == 0 else "Override"
-        )
+        self.main_app.depth_line_mode = "Auto" if self.line_mode_combo.currentIndex() == 0 else "Override"
         if not self.main_app.show_depth_line:
             self.main_app.depth_line.hide()
-        port = (
-            int(self.nmea_port_input.text())
-            if self.nmea_port_input.text().isdigit()
-            else 10110
-        )
+        port = int(self.nmea_port_input.text()) if self.nmea_port_input.text().isdigit() else 10110
         self.main_app.configure_nmea_output(self.nmea_checkbox.isChecked(), port)
         self.close()
 
     def handle_quit_app(self):
-        """Close the settings dialog AND the main application."""
-        self.close() # Close settings window
-        self.main_app.close() # Close main waterfall window (triggering app exit)
+        self.close() 
+        self.main_app.close() 
 
 
 # --- 主應用程式 ---
@@ -953,17 +766,13 @@ class WaterfallApp(QMainWindow):
     def __init__(self):
         super().__init__()
         print("[Init] Starting WaterfallApp...")
-        self.recorder = DataRecorder()  # [新增] 初始化錄製器
-
+        self.recorder = DataRecorder() 
         self.serial_thread = None
         
         self.serial_port_name = ""
         ports = get_serial_ports()
         if ports:
             self.serial_port_name = ports[0]
-        
-        # [新增] 錄影開始時間變數
-        self.record_start_time = 0.0
         
         self.is_connected = False
         self.nmea_output_enabled = False
@@ -983,21 +792,21 @@ class WaterfallApp(QMainWindow):
         self.current_sample_delay = CURRENT_SAMPLE_DELAY_US
 
         self.current_cycles = 16
+        self.blind_zone_val = 60
+        self.operating_mode = 2 # 0: 40kHz, 1: 200kHz, 2: Dual
 
         self.tvg_curve = np.linspace(1.0, TVG_STRENGTH, self.current_max_samples)
 
         self.latest_frame_data = None
         self.latest_frame_meta = None
 
-        # [新增] 用來暫存最新的 CPU 和 Fan 數值 (緩存機制)
-        # 解決 Nuitka 編譯後讀取過快導致 psutil.cpu_percent 歸零的問題
         self.current_cpu_usage = 0.0 
         self.current_ram_usage = 0.0
         self.current_temp = 0.0
         self.current_fan_rpm = 0
+        self.record_start_time = 0.0
 
         self.setWindowTitle("Open Echo Interface")
-        # self.resize(int(900 * UI_SCALE_FACTOR), int(550 * UI_SCALE_FACTOR))
         self.showMaximized()
         self.setStyleSheet(
             f"""
@@ -1008,19 +817,8 @@ class WaterfallApp(QMainWindow):
             QPushButton.sidebar_btn:hover {{ background-color: #3e4145; color: white; }} QPushButton.sidebar_btn:pressed {{ background-color: #1a1a1a; color: #00aaff; }}
             QPushButton.connect_active {{ background-color: transparent; border: none; border-bottom: 1px solid #3e4145; border-left: 4px solid #ff5555; color: #ff5555; font-size: {SIDEBAR_FONT_SIZE}px; font-weight: bold; padding: 10px; }}
             QPushButton.connect_active:hover {{ background-color: #3e4145; }}
-            
-            /* [新增] 錄製按鈕樣式 (紅色當作 Recording) */
-            QPushButton.record_active {{ 
-                background-color: #aa0000; 
-                border: none; 
-                border-bottom: 1px solid #3e4145; 
-                color: white; 
-                font-size: {SIDEBAR_FONT_SIZE}px; 
-                font-weight: bold; 
-                padding: 10px; 
-            }}
+            QPushButton.record_active {{ background-color: #aa0000; border: none; border-bottom: 1px solid #3e4145; color: white; font-size: {SIDEBAR_FONT_SIZE}px; font-weight: bold; padding: 10px; }}
             QPushButton.record_active:hover {{ background-color: #cc0000; }}
-
             QFrame#gainGaugeWidget {{ background-color: transparent; border-bottom: 1px solid #3e4145; }} QFrame#gainGaugeWidget:hover {{ background-color: #3e4145; }}
             QLabel#gainLabel {{ background-color: transparent; color: #ccc; font-weight: bold; font-size: {SIDEBAR_FONT_SIZE}px; }}
             QLabel#gainSubLabel {{ background-color: transparent; color: #ccc; font-size: {SIDEBAR_FONT_SIZE - 2}px; margin-top: -2px; }}
@@ -1079,7 +877,6 @@ class WaterfallApp(QMainWindow):
         self.waterfall.addItem(self.depth_line)
 
         self.set_sound_speed(self.current_speed)
-
         left_layout.addWidget(self.waterfall)
 
         footer_frame = QFrame()
@@ -1087,48 +884,43 @@ class WaterfallApp(QMainWindow):
         footer_layout = QHBoxLayout(footer_frame)
         footer_layout.setContentsMargins(5, 2, 5, 2)
 
-        # 左邊：深度資訊
         self.lbl_footer_depth = QLabel("Depth: ---")
-        self.lbl_footer_depth.setObjectName("footerLabel") # 吃原本的設定
+        self.lbl_footer_depth.setObjectName("footerLabel") 
         self.lbl_footer_ovr = QLabel("Override: ---")
-        self.lbl_footer_ovr.setObjectName("footerLabel")   # 吃原本的設定
-
-        # [修改] 右邊：系統狀態
-        # 全部都設定 objectName 為 "footerLabel"
+        self.lbl_footer_ovr.setObjectName("footerLabel")   
         
         self.lbl_cpu = QLabel("CPU: --%")
         self.lbl_cpu.setObjectName("footerLabel") 
-
         self.lbl_temp = QLabel("Temp: --°C")
         self.lbl_temp.setObjectName("footerLabel")
-        
-        # [新增] Fan Label
         self.lbl_fan = QLabel("Fan: -- RPM")
         self.lbl_fan.setObjectName("footerLabel")
-
         self.lbl_ram = QLabel("RAM: --%")
         self.lbl_ram.setObjectName("footerLabel")
 
-        # [排版]
-        footer_layout.addWidget(self.lbl_footer_depth) # 左 1
-        footer_layout.addWidget(self.lbl_footer_ovr)   # 左 2
-
-        footer_layout.addStretch()  # [彈簧] 推到最右邊
-
-        footer_layout.addWidget(self.lbl_cpu)  # 右 1
-        footer_layout.addWidget(self.lbl_temp) # 右 2
-        footer_layout.addWidget(self.lbl_fan)  # [新增] 右 3 (Temp 後面)
-        footer_layout.addWidget(self.lbl_ram)  # 右 4
+        footer_layout.addWidget(self.lbl_footer_depth) 
+        footer_layout.addWidget(self.lbl_footer_ovr)   
+        footer_layout.addStretch()  
+        footer_layout.addWidget(self.lbl_cpu)  
+        footer_layout.addWidget(self.lbl_temp) 
+        footer_layout.addWidget(self.lbl_fan)  
+        footer_layout.addWidget(self.lbl_ram)  
 
         left_layout.addWidget(footer_frame)
         main_layout.addWidget(left_container, stretch=1)
 
-
-        # [新增] 啟動一個獨立的 Timer，每秒更新一次系統狀態 (不要跟繪圖 Timer 混在一起)
         self.stat_timer = QTimer()
-        self.stat_timer.setInterval(1000) # 1000ms = 1秒
+        self.stat_timer.setInterval(1000) 
         self.stat_timer.timeout.connect(self.update_system_stats)
         self.stat_timer.start()
+
+        # ==========================================
+        # [關鍵修改] 註解掉/刪除舊有的 QTimer 更新機制
+        # ==========================================
+        # self.update_timer = QTimer()
+        # self.update_timer.setInterval(1000 // FPS_LIMIT)
+        # self.update_timer.timeout.connect(self.update_plot_from_buffer)
+        # self.update_timer.start()
 
         self.colorbar = pg.HistogramLUTWidget()
         self.colorbar.setImageItem(self.imageitem)
@@ -1155,17 +947,7 @@ class WaterfallApp(QMainWindow):
         self.btn_plus.setFixedHeight(SIDEBAR_BTN_HEIGHT)
         self.btn_plus.setStyleSheet(
             f"""
-            QPushButton {{ 
-                background-color: transparent; 
-                border: none; 
-                border-bottom: 1px solid #3e4145; 
-                border-right: 1px solid #3e4145; 
-                color: #ccc; 
-                font-family: 'Malgun Gothic';
-                font-size: {ZOOM_FONT_SIZE}px; 
-                font-weight: bold; 
-                border-radius: 0px; 
-            }}
+            QPushButton {{ background-color: transparent; border: none; border-bottom: 1px solid #3e4145; border-right: 1px solid #3e4145; color: #ccc; font-family: 'Malgun Gothic'; font-size: {ZOOM_FONT_SIZE}px; font-weight: bold; border-radius: 0px; }}
             QPushButton:hover {{ background-color: #3e4145; color: white; }}
             QPushButton:pressed {{ background-color: #1a1a1a; color: #00aaff; }}
         """
@@ -1176,16 +958,7 @@ class WaterfallApp(QMainWindow):
         self.btn_minus.setFixedHeight(SIDEBAR_BTN_HEIGHT)
         self.btn_minus.setStyleSheet(
             f"""
-            QPushButton {{ 
-                background-color: transparent; 
-                border: none; 
-                border-bottom: 1px solid #3e4145; 
-                color: #ccc; 
-                font-family: 'Malgun Gothic';
-                font-size: {ZOOM_FONT_SIZE}px; 
-                font-weight: bold; 
-                border-radius: 0px; 
-            }}
+            QPushButton {{ background-color: transparent; border: none; border-bottom: 1px solid #3e4145; color: #ccc; font-family: 'Malgun Gothic'; font-size: {ZOOM_FONT_SIZE}px; font-weight: bold; border-radius: 0px; }}
             QPushButton:hover {{ background-color: #3e4145; color: white; }}
             QPushButton:pressed {{ background-color: #1a1a1a; color: #00aaff; }}
         """
@@ -1194,7 +967,6 @@ class WaterfallApp(QMainWindow):
 
         zoom_layout.addWidget(self.btn_plus)
         zoom_layout.addWidget(self.btn_minus)
-
         side_layout.addWidget(zoom_widget)
 
         self.btn_range = QPushButton("Range")
@@ -1213,13 +985,11 @@ class WaterfallApp(QMainWindow):
         self.lna_widget.clicked.connect(self.cycle_lna_gain)
         side_layout.addWidget(self.lna_widget)
 
-        # Spacer
         spacer = QWidget()
         spacer.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Expanding)
         spacer.setStyleSheet("background-color: transparent;")
         side_layout.addWidget(spacer)
 
-        # [新增] 錄製按鈕
         self.btn_record = QPushButton("Record")
         self.btn_record.setProperty("class", "sidebar_btn")
         self.btn_record.setFixedHeight(SIDEBAR_BTN_HEIGHT)
@@ -1237,11 +1007,6 @@ class WaterfallApp(QMainWindow):
         self.btn_connect.clicked.connect(self.handle_main_connect)
         side_layout.addWidget(self.btn_connect)
         main_layout.addWidget(sidebar)
-
-        self.update_timer = QTimer()
-        self.update_timer.setInterval(1000 // FPS_LIMIT)
-        self.update_timer.timeout.connect(self.update_plot_from_buffer)
-        self.update_timer.start()
 
     def change_resolution(self, new_samples):
         print(f"[System] Changing resolution to {new_samples} samples")
@@ -1262,16 +1027,15 @@ class WaterfallApp(QMainWindow):
 
     def set_sample_delay(self, delay_us):
         global SAMPLE_TIME, SAMPLE_RESOLUTION
-        print(
-            f"[System] Changing sample delay to {delay_us} us, Cycles to {self.current_cycles}"
-        )
+        print(f"[System] Changing sample delay to {delay_us} us, Cycles to {self.current_cycles}")
         self.current_sample_delay = delay_us
         SAMPLE_TIME = (delay_us + 3.4) * 1e-6
         SAMPLE_RESOLUTION = (self.current_speed * SAMPLE_TIME * 100) / 2
 
         if self.serial_thread and self.serial_thread.isRunning():
             val = int(delay_us)
-            cmd = struct.pack("BBB", ord("D"), val, int(self.current_cycles))
+            # [修改] 傳送 5 bytes (Cmd, Delay, Cycles, BlindZone, Mode)
+            cmd = struct.pack("BBBBB", ord("D"), val, int(self.current_cycles), int(self.blind_zone_val), int(self.operating_mode))
             self.serial_thread.send_raw_command(cmd)
         self.update_zoom_range()
 
@@ -1279,10 +1043,8 @@ class WaterfallApp(QMainWindow):
         global SPEED_OF_SOUND, SAMPLE_RESOLUTION
         SPEED_OF_SOUND = self.current_speed = speed
         SAMPLE_RESOLUTION = (SPEED_OF_SOUND * SAMPLE_TIME * 100) / 2
-
         ax = self.waterfall.getAxis("right")
         ax.setTickFont(QFont("Arial", AXIS_FONT_SIZE))
-
         self.update_zoom_range()
 
     def show_color_menu(self):
@@ -1292,38 +1054,21 @@ class WaterfallApp(QMainWindow):
         window_geo = self.geometry()
         popup_width = popup.width()
         popup_height = popup.height()
-        center_x = (
-            window_geo.x()
-            + window_geo.width()
-            - int(110 * UI_SCALE_FACTOR)
-            - popup_width
-        )
+        center_x = window_geo.x() + window_geo.width() - int(110 * UI_SCALE_FACTOR) - popup_width
         center_y = window_geo.y() + (window_geo.height() - popup_height) // 2
         popup.move(center_x, center_y)
         popup.show()
 
     def show_range_menu(self):
-        raw_options = (
-            RANGE_OPTIONS_AIR
-            if self.current_speed == AIR_SPEED
-            else RANGE_OPTIONS_WATER
-        )
+        raw_options = RANGE_OPTIONS_AIR if self.current_speed == AIR_SPEED else RANGE_OPTIONS_WATER
         max_phys_depth = (self.current_max_samples * SAMPLE_RESOLUTION) / 100.0
-
         valid_options = [opt for opt in raw_options if (opt * 4.0) <= max_phys_depth]
-        min_depth_limit = (
-            MIN_VIEW_METERS_AIR
-            if self.current_speed == AIR_SPEED
-            else MIN_VIEW_METERS_WATER
-        )
+        min_depth_limit = MIN_VIEW_METERS_AIR if self.current_speed == AIR_SPEED else MIN_VIEW_METERS_WATER
         valid_options = [opt for opt in valid_options if (opt * 4.0) >= min_depth_limit]
-
         if not valid_options:
             valid_options = [raw_options[-1]]
-
         popup = RangePopup(self.current_zoom_samples, valid_options, self)
         popup.itemSelected.connect(self.set_range_step)
-
         btn_pos = self.btn_range.mapToGlobal(QPoint(0, 0))
         self.position_popup(popup, btn_pos)
 
@@ -1355,34 +1100,24 @@ class WaterfallApp(QMainWindow):
             self.serial_thread.send_raw_command(struct.pack("BBB", ord("W"), 0x13, val))
 
     def zoom_in(self):
-        min_total_depth_m = (
-            MIN_VIEW_METERS_AIR
-            if self.current_speed == AIR_SPEED
-            else MIN_VIEW_METERS_WATER
-        )
+        min_total_depth_m = MIN_VIEW_METERS_AIR if self.current_speed == AIR_SPEED else MIN_VIEW_METERS_WATER
         min_allowed_samples = (min_total_depth_m * 100.0) / SAMPLE_RESOLUTION
         next_samples = self.current_zoom_samples - 200
-
         if next_samples < min_allowed_samples:
             self.current_zoom_samples = min_allowed_samples
         else:
             self.current_zoom_samples = next_samples
-
         self.update_zoom_range()
 
     def zoom_out(self):
         step = 200
-        self.current_zoom_samples = min(
-            self.current_max_samples, self.current_zoom_samples + step
-        )
+        self.current_zoom_samples = min(self.current_max_samples, self.current_zoom_samples + step)
         self.update_zoom_range()
 
     def update_zoom_range(self):
         pad_top = self.current_zoom_samples * 0.02
         pad_bottom = self.current_zoom_samples * 0.02
-        self.waterfall.setYRange(
-            -pad_top, self.current_zoom_samples + pad_bottom
-        )
+        self.waterfall.setYRange(-pad_top, self.current_zoom_samples + pad_bottom)
         overlay_pos = self.current_zoom_samples - (self.current_zoom_samples * 0.05)
         self.depth_overlay.setPos(10, overlay_pos)
 
@@ -1406,9 +1141,7 @@ class WaterfallApp(QMainWindow):
         for idx, label in ticks:
             if idx > 0:
                 line = pg.InfiniteLine(
-                    pos=idx,
-                    angle=0,
-                    pen=pg.mkPen(color=(150, 150, 150, 150), style=Qt.DashLine),
+                    pos=idx, angle=0, pen=pg.mkPen(color=(150, 150, 150, 150), style=Qt.DashLine)
                 )
                 self.waterfall.addItem(line)
 
@@ -1418,30 +1151,21 @@ class WaterfallApp(QMainWindow):
         html_str = f"""<div style="text-align: left; line-height: 90%; font-family: 'Malgun Gothic';"><span style="font-size: {OVERLAY_FONT_L}pt; font-weight: 600; color: {color_hex};">{display_val_m:.1f}</span><span style="font-size: {OVERLAY_FONT_M}pt; font-weight: 600; color: {color_hex};">m</span><br><span style="font-size: {OVERLAY_FONT_S}pt; color: #cccccc; font-weight: 600;">{freq_text}</span></div>"""
         self.depth_overlay.setHtml(html_str)
 
-    # [修改] on_packet_received 改為 "只讀取"，不再負責計算 psutil
+    # --- 接收資料與立刻畫圖 ---
     def on_packet_received(self, packet):
         self.latest_frame_data = packet[0]
         self.latest_frame_meta = packet[1:]
 
         if self.recorder.running and psutil:
             raw, depth, freq, _ = packet
-            
-            # [關鍵修正] 
-            # 這裡不再呼叫 psutil.cpu_percent (因為速度太快會導致回傳 0.0)
-            # 改為直接讀取 update_system_stats 每秒算好的數值 (self.current_cpu_usage)
-            
             self.recorder.add_data(
-                raw,
-                depth,
-                freq,
-                self.current_speed,
-                self.current_sample_delay,
-                self.current_cycles,
-                self.current_cpu_usage,  # 直接使用共享變數
-                self.current_ram_usage,  # 直接使用共享變數
-                self.current_temp,       # 直接使用共享變數
-                self.current_fan_rpm     # 直接使用共享變數 (int)
+                raw, depth, freq, self.current_speed, self.current_sample_delay,
+                self.current_cycles, self.current_cpu_usage, self.current_ram_usage,
+                self.current_temp, self.current_fan_rpm
             )
+
+        # [關鍵修改] 不用等 Timer，資料一到立刻更新畫面，確保交替畫圖
+        self.update_plot_from_buffer()
 
     def update_plot_from_buffer(self):
         if self.latest_frame_data is None:
@@ -1454,20 +1178,21 @@ class WaterfallApp(QMainWindow):
             if abs(len(raw_data) - self.current_max_samples) > 0:
                 self.current_max_samples = len(raw_data)
                 self.data = np.zeros((MAX_ROWS, self.current_max_samples))
-                self.tvg_curve = np.linspace(
-                    1.0, TVG_STRENGTH, self.current_max_samples
-                )
                 self.depth_history = np.full(MAX_ROWS, np.nan)
                 self.depth_line.setData(
                     x=np.arange(MAX_ROWS), y=self.depth_history, connect="finite"
                 )
 
-        filtered = sonar_display_pipeline_optimized(raw_data, self.tvg_curve)
-
         self.data = np.roll(self.data, -1, axis=0)
-        self.data[-1, :] = filtered
+        self.data[-1, :] = raw_data
+
         self.imageitem.setImage(self.data.T, autoLevels=False)
-        self.imageitem.setLevels((10, 220))
+
+        sigma = np.std(self.data)
+        mean = np.mean(self.data)
+        if sigma == 0:
+            sigma = 1
+        self.imageitem.setLevels((mean - 2 * sigma, mean + 2 * sigma))
 
         depth_m = (depth_index * SAMPLE_RESOLUTION) / 100.0
         ovr_m = (override_idx * SAMPLE_RESOLUTION) / 100.0
@@ -1476,13 +1201,13 @@ class WaterfallApp(QMainWindow):
         diff = abs(int(depth_index) - int(override_idx))
         is_consistent = diff <= INDEX_TOLERANCE
         is_reliable = not_blind and is_consistent
-        target_depth_idx = (
-            depth_index if self.depth_line_mode == "Auto" else override_idx
-        )
+        
+        target_depth_idx = depth_index if self.depth_line_mode == "Auto" else override_idx
         val_to_plot = target_depth_idx if is_reliable else np.nan
 
         self.depth_history = np.roll(self.depth_history, -1)
         self.depth_history[-1] = val_to_plot
+        
         if self.show_depth_line:
             self.depth_line.setData(
                 x=np.arange(MAX_ROWS), y=self.depth_history, connect="finite"
@@ -1500,141 +1225,76 @@ class WaterfallApp(QMainWindow):
 
         self.lbl_footer_depth.setText(f"Depth: {depth_m * 100:.0f} cm")
         self.lbl_footer_ovr.setText(f"Override: {ovr_m * 100:.0f} cm")
+        
         self.latest_frame_data = None
 
-    # [修改] 這是唯一負責計算與更新系統狀態的地方 (每秒執行)
     def update_system_stats(self):
         if psutil is None:
             return
-
-        # ==================================================
-        # [關鍵邏輯] 統一讀取所有感測器數值，並存入共享變數
-        # 這樣做能確保 psutil 每次間隔足夠長 (~1秒)，計算出的 CPU 數值才準確
-        # ==================================================
         
-        # 1. 計算 CPU (間隔固定為 1 秒左右，數值會很準)
         try:
             self.current_cpu_usage = psutil.cpu_percent(interval=None)
         except:
             self.current_cpu_usage = 0.0
 
-        # 2. 讀取 RAM
         try:
             self.current_ram_usage = psutil.virtual_memory().percent
         except:
             self.current_ram_usage = 0.0
             
-        # 3. 讀取溫度
         try:
             with open("/sys/class/thermal/thermal_zone0/temp", "r") as f:
                 self.current_temp = int(f.read()) / 1000.0
         except:
             self.current_temp = 0.0
             
-        # 4. 讀取風扇
         try:
             with open("/sys/class/hwmon/hwmon2/fan1_input", "r") as f:
                 self.current_fan_rpm = int(f.read().strip())
         except:
             self.current_fan_rpm = 0
 
-        # ==================================================
-        # [新增] 更新錄影計時器
-        # ==================================================
         if self.recorder.running:
-            # 計算經過秒數
             elapsed_seconds = int(time.time() - self.record_start_time)
-            
-            # 轉成 HH:MM:SS 格式
-            # divmod(總秒數, 60) -> (總分鐘, 餘秒)
-            # divmod(總分鐘, 60) -> (小時, 分鐘)
             m, s = divmod(elapsed_seconds, 60)
             h, m = divmod(m, 60)
-            
-            # 更新按鈕文字 (Rec 01:23:45)
-            # 使用 f-string 的 :02d 補零
             time_str = f"Rec {h:02d}:{m:02d}:{s:02d}"
             self.btn_record.setText(time_str)
 
-        # ==================================================
-        # 更新 GUI 顯示
-        # ==================================================
         self.lbl_cpu.setText(f"CPU: {self.current_cpu_usage:.1f}%")
         self.lbl_ram.setText(f"RAM: {self.current_ram_usage:.1f}%")
         self.lbl_temp.setText(f"Temp: {self.current_temp:.1f}°C")
         self.lbl_fan.setText(f"Fan: {self.current_fan_rpm} RPM")
 
-        # 顏色警示
         if self.current_temp > 75:
-            # 警告狀態：強制變紅且加粗
             f_size = int(10 * UI_SCALE_FACTOR)
             self.lbl_temp.setStyleSheet(f"color: #ff5555; font-weight: bold; font-size: {f_size}px;")
         else:
-            # 正常狀態：清空樣式表
             self.lbl_temp.setStyleSheet("")
 
-    # [新增] 處理錄製開關
     def toggle_recording(self):
         if not self.recorder.running:
-            # 1. 建立對話框物件 (不再使用靜態函式)
             dialog = QFileDialog(self, "Select Folder to Save Data")
             dialog.setFileMode(QFileDialog.Directory)
             dialog.setOption(QFileDialog.DontUseNativeDialog, True)
-
-            # 2. [關鍵] 強制設定這個對話框的樣式 (傳統白底黑字風格)
-            # 這樣可以覆蓋掉主程式的「黑色/透明」設定，確保按鈕與文字絕對清晰
             dialog.setStyleSheet(
                 """
-                QWidget { 
-                    background-color: #f0f0f0; 
-                    color: black; 
-                    font-family: 'Arial';
-                    font-size: 14px;
-                }
-                QPushButton { 
-                    background-color: #e1e1e1; 
-                    color: black; 
-                    border: 1px solid #adadad; 
-                    padding: 6px 12px; 
-                    border-radius: 3px;
-                    min-width: 60px;
-                }
-                QPushButton:hover { 
-                    background-color: #cce8ff; 
-                    border: 1px solid #99d1ff;
-                }
-                QPushButton:pressed {
-                    background-color: #99c9ff;
-                }
-                QLineEdit { 
-                    background-color: white; 
-                    color: black; 
-                    border: 1px solid #adadad; 
-                }
-                QListView { 
-                    background-color: white; 
-                    color: black; 
-                    border: 1px solid #adadad;
-                }
-                QTreeView { 
-                    background-color: white; 
-                    color: black; 
-                    border: 1px solid #adadad;
-                }
+                QWidget { background-color: #f0f0f0; color: black; font-family: 'Arial'; font-size: 14px; }
+                QPushButton { background-color: #e1e1e1; color: black; border: 1px solid #adadad; padding: 6px 12px; border-radius: 3px; min-width: 60px; }
+                QPushButton:hover { background-color: #cce8ff; border: 1px solid #99d1ff; }
+                QPushButton:pressed { background-color: #99c9ff; }
+                QLineEdit { background-color: white; color: black; border: 1px solid #adadad; }
+                QListView { background-color: white; color: black; border: 1px solid #adadad; }
+                QTreeView { background-color: white; color: black; border: 1px solid #adadad; }
             """
             )
-
-            # 3. 執行對話框
             if dialog.exec_():
                 files = dialog.selectedFiles()
                 if files:
                     folder = files[0]
                     if self.recorder.start_recording(folder):
-                        # [關鍵] 記錄開始那一刻的時間
                         self.record_start_time = time.time()
-                        # 初始文字
                         self.btn_record.setText("00:00:00")
-                        #self.btn_record.setText("Stop Rec")
                         self.btn_record.setProperty("class", "record_active")
                         self.btn_record.setStyle(self.btn_record.style())
         else:
@@ -1645,10 +1305,9 @@ class WaterfallApp(QMainWindow):
 
     def handle_main_connect(self):
         if self.is_connected:
-            # 斷線邏輯
             if self.serial_thread:
                 self.serial_thread.stop()
-                self.serial_thread.wait()  # Ensure clean exit
+                self.serial_thread.wait() 
                 self.serial_thread = None
             self.is_connected = False
             self.btn_connect.setText("Connect")
@@ -1657,7 +1316,6 @@ class WaterfallApp(QMainWindow):
             self.lbl_footer_depth.setText("Depth: ---")
             self.lbl_footer_ovr.setText("Override: ---")
         else:
-            # 連線邏輯 (僅剩 Serial)
             if not self.serial_port_name or self.serial_port_name == "No Ports":
                 return print("No Serial Port Selected")
             
@@ -1667,30 +1325,23 @@ class WaterfallApp(QMainWindow):
 
             QThread.msleep(2000)
 
-            # 初始化指令
             cmd = struct.pack(">B H", ord("N"), self.current_max_samples)
             self.serial_thread.send_raw_command(cmd)
             QThread.msleep(50)
 
-            # 傳送初始 Delay 與 Cycles
+            # [修改] 初始連線時也傳送包含 Mode 的 5 bytes D 指令
             val = int(self.current_sample_delay)
-            cmd = struct.pack("BBB", ord("D"), val, int(self.current_cycles))
+            cmd = struct.pack("BBBBB", ord("D"), val, int(self.current_cycles), int(self.blind_zone_val), int(self.operating_mode))
             self.serial_thread.send_raw_command(cmd)
             QThread.msleep(50)
 
-            # 傳送 LNA Gain
             reg_map = {1: 0x05, 2: 0x07, 3: 0x04, 4: 0x06}
             val = reg_map.get(self.lna_gain, 0x06)
-            self.serial_thread.send_raw_command(
-                struct.pack("BBB", ord("W"), 0x13, val)
-            )
+            self.serial_thread.send_raw_command(struct.pack("BBB", ord("W"), 0x13, val))
 
-            # 傳送 Threshold
             data = (self.saved_echo_thr - 1) | 0x10
             addr = 0x17
-            self.serial_thread.send_raw_command(
-                struct.pack("BBB", ord("W"), addr, data)
-            )
+            self.serial_thread.send_raw_command(struct.pack("BBB", ord("W"), addr, data))
 
             self.is_connected = True
             self.btn_connect.setText("Stop")
@@ -1709,14 +1360,12 @@ class WaterfallApp(QMainWindow):
         self.nmea_output_enabled, self.nmea_port = e, p
 
     def closeEvent(self, e):
-        # [安全清理]
         if self.recorder.running:
             self.recorder.stop_recording()
         if self.serial_thread:
             self.serial_thread.stop()
-            self.serial_thread.wait()  # Wait for thread to finish
+            self.serial_thread.wait()
         e.accept()
-
 
 if __name__ == "__main__":
     os.environ["QT_AUTO_SCREEN_SCALE_FACTOR"] = "1"
