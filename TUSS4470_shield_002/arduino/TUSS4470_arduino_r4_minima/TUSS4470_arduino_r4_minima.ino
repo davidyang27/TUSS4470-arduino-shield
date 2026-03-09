@@ -2,21 +2,26 @@
 #include <SPI.h>
 #include <FspTimer.h>
 
-// ---------------------- CONFIG ----------------------
-#define MAX_SAMPLES 18000 // 靜態分配最大記憶體
-volatile uint16_t currentNumSamples = 2000; // 預設採樣數
-volatile uint8_t  currentSampleDelay = 11;  // 預設採樣延遲
+// ======================================================================
+// --- 雙頻系統配置 ---
+// ======================================================================
+#define MAX_SAMPLES 18000 
+volatile uint16_t currentNumSamples = 2000; 
 
-// [新增] 盲區計算參數
-const float ADC_OVERHEAD = 3.4f; 
-const float RINGING_DURATION_US = 90 * (11.5f + ADC_OVERHEAD); 
+// --- 雙頻狀態機變數 ---
+bool isHighFreqPing = false; 
 
-volatile int currentBlindZone = 90; 
+// [新增] 工作模式：0 = 40kHz, 1 = 200kHz, 2 = 雙頻交錯
+volatile uint8_t currentOpMode = 2; 
 
-// [修改] 脈衝數量控制，預設 32 toggles (16 cycles)
-volatile int targetToggleCount = 32; 
+// --- 接收 Python 傳來的參數 ---
+volatile uint8_t currentSampleDelay = 11;
+volatile int currentBlindZone = 60;
+volatile int baseCycles = 16; // 基準波數 (以 40kHz 為基準)
 
-// ---------------------- PIN CONFIGURATION ----------------------
+// ======================================================================
+// --- PIN CONFIGURATION ---
+// ======================================================================
 const int SPI_CS = 10;
 const int IO1 = 8;
 const int IO2 = 9; 
@@ -24,7 +29,9 @@ const int O3 = 3;
 const int O4 = 2;  
 const int analogIn = A0;
 
-// ---------------------- REGISTERS (R4) ----------------------
+// ======================================================================
+// --- REGISTERS (R4) ---
+// ======================================================================
 #define MSTP_BASE   0x40040000u
 #define MSTPCRD    (*(volatile uint32_t *)(MSTP_BASE + 0x7008u))
 #define ADC_BASE    0x40050000u
@@ -33,11 +40,13 @@ const int analogIn = A0;
 #define ADCER      (*(volatile uint16_t *)(ADC_BASE + 0xC00Eu))
 #define ADDR09     (*(volatile uint16_t *)(ADC_BASE + 0xC020u + 18))
 
-// ---------------------- DATA STRUCTURE ----------------------
+// ======================================================================
+// --- DATA STRUCTURE ---
+// ======================================================================
 struct __attribute__((packed)) Header {
   uint8_t  start = 0xAA;
   uint16_t depth_index;            
-  int16_t  drive_frequency; // [修正] 改名為 drive_frequency
+  int16_t  drive_frequency; 
   uint16_t vDrv_scaled;
   uint16_t num_samples; 
 };
@@ -45,31 +54,40 @@ struct __attribute__((packed)) Header {
 Header header;
 uint8_t sampleBuffer[MAX_SAMPLES]; 
 
-// ---------------------- GLOBALS ----------------------
+// ======================================================================
+// --- GLOBALS ---
+// ======================================================================
 byte misoBuf[2];  
 byte inByteArr[2];  
 
 volatile int pulseCount = 0;
 volatile int sampleIndex = 0;
 
-float temperature = 0.0f;
-int vDrv = 0;
-
 volatile bool detectedDepth = false;  
 volatile uint16_t depthDetectSample = 0;
 
+// 宣告單一 Timer 與 通道
 FspTimer burstTimer;
+uint8_t timer_channel;
 
+// 當下這回合目標要打幾次 Toggle (動態變化)
+volatile int currentToggleCount = 32;
+
+// ======================================================================
+// --- TIMER CALLBACK ---
+// ======================================================================
 void burstCallback(timer_callback_args_t *) {
   digitalWrite(IO2, !digitalRead(IO2)); 
   pulseCount++;
-  // [修改] 使用變數 targetToggleCount
-  if (pulseCount >= targetToggleCount) { 
+  
+  if (pulseCount >= currentToggleCount) { 
     burstTimer.stop();
     pulseCount = 0;  
+    digitalWrite(IO2, LOW); // 確保最後停在 LOW
   }
 }
 
+// 深度偵測中斷
 void handleInterrupt() {
   if (!detectedDepth) {
     depthDetectSample = sampleIndex;
@@ -83,14 +101,9 @@ void stopTransducer() {
   digitalWrite(IO2, LOW); 
 }
 
-// [修改] 僅計算盲區，不再自動改變 Cycles
-void calcBlindZone() {
-  // 總餘震時間 / (當前Delay + 硬體開銷) = 需要避開的點數
-  float timePerSample = (float)currentSampleDelay + ADC_OVERHEAD;
-  currentBlindZone = (int)(RINGING_DURATION_US / timePerSample);
-  if (currentBlindZone < 5) currentBlindZone = 5;
-}
-
+// ======================================================================
+// --- SPI & UTILS ---
+// ======================================================================
 unsigned int BitShiftCombine(unsigned char x_high, unsigned char x_low) {
   return (x_high << 8) | x_low;  
 }
@@ -131,6 +144,9 @@ byte tuss4470Parity(byte* spi16Val) {
   return parity16(BitShiftCombine(spi16Val[0], spi16Val[1]));
 }
 
+// ======================================================================
+// --- SETUP ---
+// ======================================================================
 void setup()
 {
   Serial.begin(2000000); 
@@ -143,55 +159,81 @@ void setup()
 
   pinMode(IO1, OUTPUT);
   digitalWrite(IO1, HIGH);
+  
   pinMode(IO2, OUTPUT);
+  digitalWrite(IO2, LOW);
+  
   pinMode(O4, INPUT_PULLUP);
   attachInterrupt(digitalPinToInterrupt(O4), handleInterrupt, RISING);
 
-  tuss4470Write(0x10, FILTER_FREQUENCY_REGISTER);  
+  // 初始化 TUSS4470 暫存器
   tuss4470Write(0x11, 0x10);                        
-  
-  // [關鍵修改] 0x1A: BURST_PULSE
-  // 為了避免 TUSS 晶片在 Arduino 之前切斷電源，
-  // 我們將其設為 0x00 (Continuous Mode)，讓 Arduino 全權控制。
-  tuss4470Write(0x1A, 0x00); 
-  
+  tuss4470Write(0x1A, 0x00); // Continuous Mode
   tuss4470Write(0x17, THRESHOLD_VALUE); 
   tuss4470Write(0x13, 0x06); 
 
+  // ===========================================================
+  // [關鍵修正] 在 setup 中只把 Timer 建立並開啟一次，避免 loop 中資源崩潰
+  // ===========================================================
   uint8_t timerType = GPT_TIMER;
-  uint8_t channel = FspTimer::get_available_timer(timerType);
-  burstTimer.begin(TIMER_MODE_PERIODIC, timerType, channel, DRIVE_FREQUENCY * 2.0f, 0.0f, burstCallback);
+  timer_channel = FspTimer::get_available_timer(timerType);
+  
+  // 先預設為 40kHz 的頻率 (80000.0f toggles)
+  burstTimer.begin(TIMER_MODE_PERIODIC, timerType, timer_channel, 80000.0f, 0.0f, burstCallback);
   burstTimer.setup_overflow_irq();
   burstTimer.open();
+  // 注意：這裡不呼叫 start()，保留在 loop 中觸發
 
+  // ADC 初始化
   MSTPCRD &= ~(1u << 16); 
   ADANSA0 = (1u << 9);    
   ADCER = 0x0000;         
   ADCSR &= ~(1u << 5);    
-  
-  // 初始化
-  calcBlindZone();
 }
 
+// ======================================================================
+// --- MAIN LOOP ---
+// ======================================================================
 void loop()
 {
   detectedDepth = false; 
   depthDetectSample = 0;
 
-  // 開始發射
+  // ---------------------------------------------------------
+  // 1. 動態配置這回合的硬體參數 (使用安全的 set_frequency)
+  // ---------------------------------------------------------
+  
+  if (isHighFreqPing) {
+    // 【高頻回合：200kHz】
+    tuss4470Write(0x10, 0x1E); // BPF 設為 ~206kHz
+    burstTimer.set_frequency(400000.0f); // 動態變更 Timer 頻率為 400k (達成 200kHz 方波)
+    currentToggleCount = baseCycles * 10; 
+  } else {
+    // 【低頻回合：40kHz】
+    tuss4470Write(0x10, 0x00); // BPF 設為 ~40.6kHz
+    burstTimer.set_frequency(80000.0f); // 動態變更 Timer 頻率為 80k (達成 40kHz 方波)
+    currentToggleCount = baseCycles * 2; 
+  }
+
+  // ---------------------------------------------------------
+  // 2. 喚醒晶片與發射
+  // ---------------------------------------------------------
   tuss4470Write(0x1B, 0x01);
   burstTimer.start(); 
 
+  // ---------------------------------------------------------
+  // 3. 高速 ADC 採樣迴圈
+  // ---------------------------------------------------------
   for (sampleIndex = 0; sampleIndex < currentNumSamples; sampleIndex++) {
     ADCSR |= (1u << 15);        
     while (ADCSR & (1u << 15));  
     
-    sampleBuffer[sampleIndex] = ADDR09 >> 4; 
+    uint8_t rawVal = ADDR09 >> 4;
+    sampleBuffer[sampleIndex] = rawVal;
 
     delayMicroseconds(currentSampleDelay); 
 
-    // 使用動態計算的 blind zone
-    if (sampleIndex == currentBlindZone) {
+    if (sampleIndex < currentBlindZone) {
       detectedDepth = false;
       depthDetectSample = 0;
     }
@@ -199,6 +241,9 @@ void loop()
 
   tuss4470Write(0x1B, 0x00);
   
+  // ---------------------------------------------------------
+  // 4. 深度覆蓋邏輯
+  // ---------------------------------------------------------
   #if USE_DEPTH_OVERRIDE
   int overrideSample = 0;
   uint8_t max = 0;
@@ -214,48 +259,80 @@ void loop()
     header.vDrv_scaled = 0;
   }
   #else
-    header.vDrv_scaled = (uint16_t)(vDrv); 
+    header.vDrv_scaled = 0; 
   #endif
   
+  // ---------------------------------------------------------
+  // 5. 標記與傳送資料
+  // ---------------------------------------------------------
+  header.drive_frequency = isHighFreqPing ? 200 : 40; 
   sendData();
 
-  // --- Serial Command Parser ---
-  if (Serial.available() >= 3) {
-    byte cmd = Serial.read(); 
+  // ---------------------------------------------------------
+  // 6. 處理 Python 指令 (使用 peek 來確保封包完整性)
+  // ---------------------------------------------------------
+  if (Serial.available() > 0) { 
+    byte cmd = Serial.peek(); // 先偷看指令是什麼，不消耗
     
     if (cmd == 'W') { 
-      byte addr = Serial.read();
-      byte data = Serial.read();
-      stopTransducer(); 
-      tuss4470Write(addr, data);
+      if (Serial.available() >= 3) {
+        Serial.read(); // 吃掉 'W'
+        byte addr = Serial.read();
+        byte data = Serial.read();
+        stopTransducer(); 
+        tuss4470Write(addr, data);
+      }
     }
     else if (cmd == 'N') { 
-      byte high = Serial.read();
-      byte low = Serial.read();
-      uint16_t newSamples = (high << 8) | low;
-      
-      if (newSamples > MAX_SAMPLES) newSamples = MAX_SAMPLES;
-      if (newSamples < 100) newSamples = 100;
-      
-      currentNumSamples = newSamples;
+      if (Serial.available() >= 3) {
+        Serial.read(); // 吃掉 'N'
+        byte high = Serial.read();
+        byte low = Serial.read();
+        uint16_t newSamples = (high << 8) | low;
+        
+        if (newSamples > MAX_SAMPLES) newSamples = MAX_SAMPLES;
+        if (newSamples < 100) newSamples = 100;
+        currentNumSamples = newSamples;
+      }
     }
     else if (cmd == 'D') { 
-      byte val = Serial.read(); // Delay
-      byte cycles = Serial.read(); // Cycles from Python
-      
-      if (val < 5) val = 5;
-      
-      currentSampleDelay = val;
-      
-      // [關鍵修改] 僅更新 Arduino 計數器
-      if (cycles > 0) {
-          // [同步修正] 將上限放寬到 128，以配合 Python
-          if (cycles > 128) cycles = 128; 
-          targetToggleCount = cycles * 2;
+      // 現在 D 指令有 5 個 bytes (D + val + cycles + blind + mode)
+      if (Serial.available() >= 5) {
+        Serial.read(); // 吃掉 'D'
+        byte val = Serial.read();    
+        byte cycles = Serial.read(); 
+        byte blind = Serial.read();  
+        byte mode = Serial.read();   // 0=40k, 1=200k, 2=Dual
+        
+        if (val < 5) val = 5;
+        currentSampleDelay = val;
+        
+        if (cycles > 0) {
+            if (cycles > 128) cycles = 128; 
+            baseCycles = cycles; 
+        }
+        
+        currentBlindZone = (int)blind;
+        
+        // 更新工作模式
+        if (mode <= 2) currentOpMode = mode;
       }
-      
-      calcBlindZone(); 
     }
+    else {
+      // 遇到不認識的垃圾字元，清掉它
+      Serial.read();
+    }
+  }
+
+  // ---------------------------------------------------------
+  // 7. 根據工作模式決定狀態反轉
+  // ---------------------------------------------------------
+  if (currentOpMode == 0) {
+    isHighFreqPing = false;      // 強制鎖定 40kHz
+  } else if (currentOpMode == 1) {
+    isHighFreqPing = true;       // 強制鎖定 200kHz
+  } else {
+    isHighFreqPing = !isHighFreqPing; // 雙頻交錯
   }
 
   delay(10);
@@ -263,14 +340,11 @@ void loop()
 
 void sendData() {
   header.depth_index = depthDetectSample;
-  // [修正] 改名為 drive_frequency
-  header.drive_frequency = (int16_t)(DRIVE_FREQUENCY / 1000); 
   header.num_samples = currentNumSamples; 
   
   uint8_t cs = 0;
   cs ^= (uint8_t)(header.depth_index & 0xFF);
   cs ^= (uint8_t)(header.depth_index >> 8);
-  // [修正] Checksum 計算也同步更名
   cs ^= (uint8_t)(header.drive_frequency & 0xFF);
   cs ^= (uint8_t)(header.drive_frequency >> 8);
   cs ^= (uint8_t)(header.vDrv_scaled & 0xFF);
@@ -284,7 +358,6 @@ void sendData() {
   
   Serial.write(header.start);
   Serial.write((uint8_t*)&header.depth_index, 2);
-  // [修正] 傳送時也同步更名
   Serial.write((uint8_t*)&header.drive_frequency, 2);
   Serial.write((uint8_t*)&header.vDrv_scaled, 2);
   Serial.write((uint8_t*)&header.num_samples, 2);
