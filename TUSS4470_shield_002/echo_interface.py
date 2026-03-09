@@ -555,7 +555,7 @@ class SettingsDialog(QDialog):
         l_cyc.setObjectName("fieldLabel")
         sonar_layout.addRow(l_cyc, self.cycles_combo)
         
-        l_blind = QLabel("Blind:")
+        l_blind = QLabel("Blind(cm):")
         l_blind.setObjectName("fieldLabel")
         sonar_layout.addRow(l_blind, self.blind_input)
         
@@ -731,10 +731,9 @@ class SettingsDialog(QDialog):
         
         # [修改] 儲存變數並套用到 Arduino
         try:
-            val = int(self.blind_input.text())
-            if val < 0: val = 0
-            if val > 255: val = 255 
-            self.main_app.blind_zone_val = val
+            val_cm = int(self.blind_input.text())
+            if val_cm < 0: val_cm = 0
+            self.main_app.blind_zone_val = val_cm
         except ValueError:
             pass 
 
@@ -792,7 +791,7 @@ class WaterfallApp(QMainWindow):
         self.current_sample_delay = CURRENT_SAMPLE_DELAY_US
 
         self.current_cycles = 16
-        self.blind_zone_val = 60
+        self.blind_zone_val = 30
         self.operating_mode = 2 # 0: 40kHz, 1: 200kHz, 2: Dual
 
         self.tvg_curve = np.linspace(1.0, TVG_STRENGTH, self.current_max_samples)
@@ -1034,9 +1033,24 @@ class WaterfallApp(QMainWindow):
 
         if self.serial_thread and self.serial_thread.isRunning():
             val = int(delay_us)
-            # [修改] 傳送 5 bytes (Cmd, Delay, Cycles, BlindZone, Mode)
-            cmd = struct.pack("BBBBB", ord("D"), val, int(self.current_cycles), int(self.blind_zone_val), int(self.operating_mode))
+            
+            # [關鍵修改] 將公分換算成點數 (Index)
+            # 點數 = 目標公分 / 每點代表的公分
+            calculated_index = int(self.blind_zone_val / SAMPLE_RESOLUTION)
+            
+            # 安全保護：Arduino 的 blind 變數是 byte，最大只能接收 255
+            if calculated_index > 255:
+                calculated_index = 255
+                print(f"[Warning] Blind zone index clamped to 255 (Requested {self.blind_zone_val}cm is too deep)")
+            elif calculated_index < 0:
+                calculated_index = 0
+                
+            print(f"[System] Blind Zone: {self.blind_zone_val} cm -> {calculated_index} points")
+
+            # 傳送 5 bytes (Cmd, Delay, Cycles, 換算後的點數, Mode)
+            cmd = struct.pack("BBBBB", ord("D"), val, int(self.current_cycles), calculated_index, int(self.operating_mode))
             self.serial_thread.send_raw_command(cmd)
+            
         self.update_zoom_range()
 
     def set_sound_speed(self, speed):
@@ -1331,7 +1345,11 @@ class WaterfallApp(QMainWindow):
 
             # [修改] 初始連線時也傳送包含 Mode 的 5 bytes D 指令
             val = int(self.current_sample_delay)
-            cmd = struct.pack("BBBBB", ord("D"), val, int(self.current_cycles), int(self.blind_zone_val), int(self.operating_mode))
+            calculated_index = int(self.blind_zone_val / SAMPLE_RESOLUTION)
+            if calculated_index > 255: calculated_index = 255
+            elif calculated_index < 0: calculated_index = 0
+            
+            cmd = struct.pack("BBBBB", ord("D"), val, int(self.current_cycles), calculated_index, int(self.operating_mode))
             self.serial_thread.send_raw_command(cmd)
             QThread.msleep(50)
 
