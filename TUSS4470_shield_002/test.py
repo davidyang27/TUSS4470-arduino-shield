@@ -49,7 +49,6 @@ except ImportError:
 # --- 全域配置參數 ---
 # ============================================================
 
-# [關鍵設定] 介面縮放比例
 UI_SCALE_FACTOR = 1.73
 
 AIR_SPEED = 343.0
@@ -139,7 +138,6 @@ def read_packet(ser):
         return None
 
     try:
-        # 解包順序對應 Arduino Header 結構
         _, depth, drive_freq, v_drv_scaled, num_samples = struct.unpack(
             "<BHhHH", header_bytes
         )
@@ -261,7 +259,6 @@ class BasePopup(QWidget):
         self.setWindowFlags(Qt.Popup | Qt.FramelessWindowHint)
         self.setAttribute(Qt.WA_DeleteOnClose)
         self.font_size = SIDEBAR_FONT_SIZE - int(3 * UI_SCALE_FACTOR)
-
         self.setStyleSheet(
             f"""
             QWidget {{ background-color: #2b2b2b; border: 1px solid #3e4145; }}
@@ -270,32 +267,6 @@ class BasePopup(QWidget):
             QPushButton[active="true"] {{ background-color: #0078d7; color: white; }}
         """
         )
-
-class ColorPopup(BasePopup):
-    itemSelected = pyqtSignal(str)
-
-    def __init__(self, current, parent=None):
-        super().__init__(parent)
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
-
-        for name in COLOR_MAPS:
-            try:
-                pg.graphicsItems.GradientEditorItem.Gradients[name]
-                btn = QPushButton(name.capitalize())
-                if name == current:
-                    btn.setProperty("active", True)
-                btn.clicked.connect(lambda checked, n=name: self.handle_click(n))
-                layout.addWidget(btn)
-            except Exception as e:
-                print(f"[Error] {e}")
-                continue
-        self.setFixedWidth(int(140 * UI_SCALE_FACTOR))
-
-    def handle_click(self, name):
-        self.itemSelected.emit(name)
-        self.close()
 
 class RangePopup(BasePopup):
     itemSelected = pyqtSignal(float)
@@ -325,6 +296,130 @@ class RangePopup(BasePopup):
     def handle_click(self, val):
         self.itemSelected.emit(val)
         self.close()
+
+# -------------------------------------------------------------
+# [新增] 專屬的色彩與對比度控制小視窗 (浮動工具視窗)
+# -------------------------------------------------------------
+class ColorControlDialog(QDialog):
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.main_app = parent
+        self.setWindowTitle("Display Control")
+        # 設定為浮動工具視窗，不會阻擋主程式操作
+        self.setWindowFlags(Qt.Tool | Qt.WindowStaysOnTopHint)
+        
+        lbl_size = int(12 * UI_SCALE_FACTOR)
+        self.setStyleSheet(
+            f"""
+            QDialog {{ background-color: #2b2b2b; border: 1px solid #555; color: #e0e0e0; font-family: 'Malgun Gothic'; }}
+            QLabel {{ color: #e0e0e0; font-weight: bold; font-size: {lbl_size}px; }}
+            QComboBox {{ background-color: #3a3a3a; border: 1px solid #555; color: white; padding: 2px 4px; font-size: {lbl_size}px; }}
+            QPushButton {{ background-color: #444; border: 1px solid #666; color: white; padding: 4px; border-radius: 3px; font-weight: bold; font-size: {lbl_size}px; }}
+            QPushButton:hover {{ background-color: #555; border-color: #777; }}
+            QPushButton:disabled {{ background-color: #222; color: #555; border-color: #333; }}
+        """
+        )
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(8)
+
+        # 1. 選擇調色盤
+        pal_layout = QHBoxLayout()
+        pal_layout.addWidget(QLabel("Palette:"))
+        self.palette_combo = QComboBox()
+        self.palette_combo.addItems(COLOR_MAPS)
+        self.palette_combo.setCurrentText(self.main_app.current_gradient)
+        self.palette_combo.currentTextChanged.connect(self.main_app.set_gradient)
+        pal_layout.addWidget(self.palette_combo)
+        layout.addLayout(pal_layout)
+        
+        # 2. Auto / Manual 切換按鈕
+        self.btn_mode = QPushButton()
+        self.btn_mode.clicked.connect(self.toggle_mode)
+        layout.addWidget(self.btn_mode)
+
+        # 3. Min 控制
+        min_layout = QHBoxLayout()
+        min_layout.addWidget(QLabel("Min:"))
+        self.btn_min_dec = QPushButton("-")
+        self.btn_min_dec.setFixedWidth(int(30 * UI_SCALE_FACTOR))
+        self.btn_min_dec.clicked.connect(lambda: self.adj_min(-5))
+        self.lbl_min = QLabel("0")
+        self.lbl_min.setAlignment(Qt.AlignCenter)
+        self.lbl_min.setFixedWidth(int(40 * UI_SCALE_FACTOR))
+        self.btn_min_inc = QPushButton("+")
+        self.btn_min_inc.setFixedWidth(int(30 * UI_SCALE_FACTOR))
+        self.btn_min_inc.clicked.connect(lambda: self.adj_min(5))
+        min_layout.addWidget(self.btn_min_dec)
+        min_layout.addWidget(self.lbl_min)
+        min_layout.addWidget(self.btn_min_inc)
+        layout.addLayout(min_layout)
+
+        # 4. Max 控制
+        max_layout = QHBoxLayout()
+        max_layout.addWidget(QLabel("Max:"))
+        self.btn_max_dec = QPushButton("-")
+        self.btn_max_dec.setFixedWidth(int(30 * UI_SCALE_FACTOR))
+        self.btn_max_dec.clicked.connect(lambda: self.adj_max(-10))
+        self.lbl_max = QLabel("255")
+        self.lbl_max.setAlignment(Qt.AlignCenter)
+        self.lbl_max.setFixedWidth(int(40 * UI_SCALE_FACTOR))
+        self.btn_max_inc = QPushButton("+")
+        self.btn_max_inc.setFixedWidth(int(30 * UI_SCALE_FACTOR))
+        self.btn_max_inc.clicked.connect(lambda: self.adj_max(10))
+        max_layout.addWidget(self.btn_max_dec)
+        max_layout.addWidget(self.lbl_max)
+        max_layout.addWidget(self.btn_max_inc)
+        layout.addLayout(max_layout)
+
+        self.update_ui_state()
+
+    def toggle_mode(self):
+        self.main_app.auto_color_enabled = not self.main_app.auto_color_enabled
+        self.update_ui_state()
+        self.main_app.update_plot_from_buffer() # 強制刷新畫面
+
+    def update_ui_state(self):
+        if self.main_app.auto_color_enabled:
+            self.btn_mode.setText("Mode: AUTO")
+            self.btn_mode.setStyleSheet("background-color: #0078d7; color: white;")
+            self.btn_min_dec.setEnabled(False)
+            self.btn_min_inc.setEnabled(False)
+            self.btn_max_dec.setEnabled(False)
+            self.btn_max_inc.setEnabled(False)
+            # 在 Auto 模式下，數字會由外部的 Timer 呼叫 update_realtime_values 來刷新
+        else:
+            self.btn_mode.setText("Mode: MANUAL")
+            self.btn_mode.setStyleSheet("background-color: #aa0000; color: white;")
+            self.btn_min_dec.setEnabled(True)
+            self.btn_min_inc.setEnabled(True)
+            self.btn_max_dec.setEnabled(True)
+            self.btn_max_inc.setEnabled(True)
+            # 切換到 Manual 時，立刻顯示手動設定的數值
+            self.lbl_min.setText(str(self.main_app.color_min_val))
+            self.lbl_max.setText(str(self.main_app.color_max_val))
+
+    def adj_min(self, delta):
+        self.main_app.color_min_val += delta
+        if self.main_app.color_min_val < 0: self.main_app.color_min_val = 0
+        if self.main_app.color_min_val >= self.main_app.color_max_val: self.main_app.color_min_val = self.main_app.color_max_val - 1
+        self.lbl_min.setText(str(self.main_app.color_min_val))
+        self.main_app.update_plot_from_buffer()
+
+    def adj_max(self, delta):
+        self.main_app.color_max_val += delta
+        if self.main_app.color_max_val > 255: self.main_app.color_max_val = 255
+        if self.main_app.color_max_val <= self.main_app.color_min_val: self.main_app.color_max_val = self.main_app.color_min_val + 1
+        self.lbl_max.setText(str(self.main_app.color_max_val))
+        self.main_app.update_plot_from_buffer()
+
+    # 由 Main App 每秒呼叫，用來在 Auto 模式下跳動顯示即時計算出的數值
+    def update_realtime_values(self, cur_min, cur_max):
+        if self.main_app.auto_color_enabled:
+            self.lbl_min.setText(str(int(cur_min)))
+            self.lbl_max.setText(str(int(cur_max)))
+# -------------------------------------------------------------
 
 class CircularGauge(QWidget):
     def __init__(self, parent=None):
@@ -797,14 +892,17 @@ class WaterfallApp(QMainWindow):
 
         self.current_cycles = 16
         self.blind_zone_val = 30
-        self.operating_mode = 1 # 0: 40kHz, 1: 200kHz, 2: Dual
+        self.operating_mode = 2 # 0: 40kHz, 1: 200kHz, 2: Dual
 
         # -------------------------------------------------------------
-        # [新增] 手動/自動色彩控制變數
+        # 色彩控制狀態變數
         # -------------------------------------------------------------
         self.auto_color_enabled = True
         self.color_min_val = 10
         self.color_max_val = 150
+        self.current_display_min = 10  # 暫存當下真正餵給畫面的值
+        self.current_display_max = 150
+        self.color_dialog = None       # 控制視窗的實體
         # -------------------------------------------------------------
 
         self.tvg_curve = np.linspace(1.0, TVG_STRENGTH, self.current_max_samples)
@@ -904,71 +1002,6 @@ class WaterfallApp(QMainWindow):
         footer_layout.addWidget(self.lbl_footer_depth) 
         footer_layout.addWidget(self.lbl_footer_ovr)   
 
-        # -------------------------------------------------------------
-        # [新增] 將 Color Mode 與 Min/Max 按鈕放在 Override 後方
-        # -------------------------------------------------------------
-        footer_layout.addSpacing(15) # 與前面的字拉開一點距離
-
-        # 定義跟底部文字列相同色調的按鈕樣式
-        footer_btn_style = f"""
-            QPushButton {{ background-color: transparent; color: #aaa; border: 1px solid #444; border-radius: 2px; padding: 2px 6px; font-size: {int(10 * UI_SCALE_FACTOR)}px; font-weight: bold; }}
-            QPushButton:hover {{ background-color: #333; color: white; border: 1px solid #666; }}
-            QPushButton:pressed {{ background-color: #555; color: #00aaff; }}
-        """
-
-        # Auto/Manual 切換按鈕
-        self.btn_color_mode = QPushButton("Color: Auto")
-        self.btn_color_mode.setStyleSheet(footer_btn_style)
-        self.btn_color_mode.setCursor(Qt.PointingHandCursor)
-        self.btn_color_mode.clicked.connect(self.toggle_color_mode)
-        footer_layout.addWidget(self.btn_color_mode)
-
-        # 建立一個隱藏的 Widget 來裝 +/- 控制項
-        self.color_ctrl_widget = QWidget()
-        cc_layout = QHBoxLayout(self.color_ctrl_widget)
-        cc_layout.setContentsMargins(5, 0, 0, 0)
-        cc_layout.setSpacing(2)
-
-        # Min 控制組
-        self.lbl_cmin = QLabel(f"Min: {self.color_min_val}")
-        self.lbl_cmin.setObjectName("footerLabel")
-        self.btn_cmin_dec = QPushButton("-")
-        self.btn_cmin_dec.setStyleSheet(footer_btn_style)
-        self.btn_cmin_dec.setCursor(Qt.PointingHandCursor)
-        self.btn_cmin_dec.clicked.connect(lambda: self.adj_color_min(-5))
-        
-        self.btn_cmin_inc = QPushButton("+")
-        self.btn_cmin_inc.setStyleSheet(footer_btn_style)
-        self.btn_cmin_inc.setCursor(Qt.PointingHandCursor)
-        self.btn_cmin_inc.clicked.connect(lambda: self.adj_color_min(5))
-        
-        cc_layout.addWidget(self.lbl_cmin)
-        cc_layout.addWidget(self.btn_cmin_dec)
-        cc_layout.addWidget(self.btn_cmin_inc)
-        
-        cc_layout.addSpacing(10)
-
-        # Max 控制組
-        self.lbl_cmax = QLabel(f"Max: {self.color_max_val}")
-        self.lbl_cmax.setObjectName("footerLabel")
-        self.btn_cmax_dec = QPushButton("-")
-        self.btn_cmax_dec.setStyleSheet(footer_btn_style)
-        self.btn_cmax_dec.setCursor(Qt.PointingHandCursor)
-        self.btn_cmax_dec.clicked.connect(lambda: self.adj_color_max(-10))
-        
-        self.btn_cmax_inc = QPushButton("+")
-        self.btn_cmax_inc.setStyleSheet(footer_btn_style)
-        self.btn_cmax_inc.setCursor(Qt.PointingHandCursor)
-        self.btn_cmax_inc.clicked.connect(lambda: self.adj_color_max(10))
-
-        cc_layout.addWidget(self.lbl_cmax)
-        cc_layout.addWidget(self.btn_cmax_dec)
-        cc_layout.addWidget(self.btn_cmax_inc)
-
-        footer_layout.addWidget(self.color_ctrl_widget)
-        self.color_ctrl_widget.hide() # 預設 Auto 模式，所以隱藏 +/-
-        # -------------------------------------------------------------
-
         footer_layout.addStretch()  
         
         self.lbl_cpu = QLabel("CPU: --%")
@@ -993,8 +1026,9 @@ class WaterfallApp(QMainWindow):
         self.stat_timer.timeout.connect(self.update_system_stats)
         self.stat_timer.start()
 
+        # 程式啟動時主動為瀑布圖套用 LUT
         self.set_gradient(self.current_gradient)
-        
+
         sidebar = QFrame()
         sidebar.setObjectName("sidebarFrame")
         sidebar.setFixedWidth(int(110 * UI_SCALE_FACTOR))
@@ -1041,11 +1075,15 @@ class WaterfallApp(QMainWindow):
         self.btn_range.clicked.connect(self.show_range_menu)
         side_layout.addWidget(self.btn_range)
         
+        # -------------------------------------------------------------
+        # [修改] 恢復單一的 Color 按鈕，用來呼叫浮動小視窗
+        # -------------------------------------------------------------
         self.btn_color = QPushButton("Color")
         self.btn_color.setProperty("class", "sidebar_btn")
         self.btn_color.setFixedHeight(SIDEBAR_BTN_HEIGHT)
         self.btn_color.clicked.connect(self.show_color_menu)
         side_layout.addWidget(self.btn_color)
+        # -------------------------------------------------------------
 
         self.lna_widget = GainGaugeWidget()
         self.lna_widget.set_value(self.lna_gain)
@@ -1076,34 +1114,6 @@ class WaterfallApp(QMainWindow):
         side_layout.addWidget(self.btn_connect)
         
         main_layout.addWidget(sidebar)
-
-    # -------------------------------------------------------------
-    # [新增] Footer 手動色彩控制的功能邏輯
-    # -------------------------------------------------------------
-    def toggle_color_mode(self):
-        self.auto_color_enabled = not self.auto_color_enabled
-        if self.auto_color_enabled:
-            self.btn_color_mode.setText("Color: Auto")
-            self.color_ctrl_widget.hide()
-        else:
-            self.btn_color_mode.setText("Color: Manual")
-            self.color_ctrl_widget.show()
-            self.update_plot_from_buffer() # 強制刷新畫面
-
-    def adj_color_min(self, delta):
-        self.color_min_val += delta
-        if self.color_min_val < 0: self.color_min_val = 0
-        if self.color_min_val >= self.color_max_val: self.color_min_val = self.color_max_val - 1
-        self.lbl_cmin.setText(f"Min: {self.color_min_val}")
-        if not self.auto_color_enabled: self.update_plot_from_buffer()
-
-    def adj_color_max(self, delta):
-        self.color_max_val += delta
-        if self.color_max_val > 255: self.color_max_val = 255
-        if self.color_max_val <= self.color_min_val: self.color_max_val = self.color_min_val + 1
-        self.lbl_cmax.setText(f"Max: {self.color_max_val}")
-        if not self.auto_color_enabled: self.update_plot_from_buffer()
-    # -------------------------------------------------------------
 
     def change_resolution(self, new_samples):
         print(f"[System] Changing resolution to {new_samples} samples")
@@ -1154,16 +1164,38 @@ class WaterfallApp(QMainWindow):
         self.update_zoom_range()
 
     def show_color_menu(self):
-        popup = ColorPopup(self.current_gradient, self)
-        popup.itemSelected.connect(self.set_gradient)
-        popup.adjustSize()
-        window_geo = self.geometry()
-        popup_width = popup.width()
-        popup_height = popup.height()
-        center_x = window_geo.x() + window_geo.width() - int(110 * UI_SCALE_FACTOR) - popup_width
-        center_y = window_geo.y() + (window_geo.height() - popup_height) // 2
-        popup.move(center_x, center_y)
-        popup.show()
+        # 如果對話框還沒建立，就建立它
+        if not hasattr(self, 'color_dialog') or self.color_dialog is None:
+            self.color_dialog = ColorControlDialog(self)
+        
+        # 顯示並拉到最上層
+        if self.color_dialog.isVisible():
+            self.color_dialog.raise_()
+            self.color_dialog.activateWindow()
+        else:
+            # 將視窗移動到 Color 按鈕的左邊
+            btn_pos = self.btn_color.mapToGlobal(QPoint(0, 0))
+            self.color_dialog.adjustSize()
+            x = btn_pos.x() - self.color_dialog.width() - 5
+            y = btn_pos.y()
+            
+            # 避免超出螢幕底部
+            screen_geo = QApplication.desktop().availableGeometry(btn_pos)
+            if y + self.color_dialog.height() > screen_geo.bottom():
+                y = screen_geo.bottom() - self.color_dialog.height() - 5
+                
+            self.color_dialog.move(x, y)
+            self.color_dialog.show()
+
+    def set_gradient(self, n):
+        self.current_gradient = n
+        try:
+            grad = pg.graphicsItems.GradientEditorItem.GradientEditorItem()
+            grad.loadPreset(n)
+            lut = grad.getLookupTable(256)
+            self.imageitem.setLookupTable(lut)
+        except Exception as e:
+            print(f"[Error] Color mapping failed: {e}")
 
     def show_range_menu(self):
         raw_options = RANGE_OPTIONS_AIR if self.current_speed == AIR_SPEED else RANGE_OPTIONS_WATER
@@ -1337,20 +1369,23 @@ class WaterfallApp(QMainWindow):
         self.imageitem.setImage(self.data.T, autoLevels=False)
 
         # -------------------------------------------------------------
-        # [修改] 結合 Auto(固定底噪) 與 Manual(自訂數值) 的畫圖邏輯
+        # 結合 Auto(固定底噪) 與 Manual(自訂數值) 的畫圖邏輯
         # -------------------------------------------------------------
         if self.auto_color_enabled:
             sigma = np.std(self.data)
             mean = np.mean(self.data)
             if sigma == 0: sigma = 1
             
-            min_level = 10 # 鎖定一個漂亮的深色背景值
+            min_level = 10 
             max_level = mean + 2.5 * sigma
             if max_level <= min_level: max_level = min_level + 1
             
+            self.current_display_min = min_level
+            self.current_display_max = max_level
             self.imageitem.setLevels((min_level, max_level))
         else:
-            # 聽從手動模式按鈕加減出來的數值
+            self.current_display_min = self.color_min_val
+            self.current_display_max = self.color_max_val
             self.imageitem.setLevels((self.color_min_val, self.color_max_val))
         # -------------------------------------------------------------
 
@@ -1459,6 +1494,12 @@ class WaterfallApp(QMainWindow):
             self.lbl_temp.setStyleSheet(f"color: #ff5555; font-weight: bold; font-size: {f_size}px;")
         else:
             self.lbl_temp.setStyleSheet("")
+            
+        # -------------------------------------------------------------
+        # [新增] 每秒更新浮動視窗內的即時數值
+        # -------------------------------------------------------------
+        if hasattr(self, 'color_dialog') and self.color_dialog and self.color_dialog.isVisible():
+            self.color_dialog.update_realtime_values(self.current_display_min, self.current_display_max)
 
     def toggle_recording(self):
         if not self.recorder.running:
@@ -1542,19 +1583,6 @@ class WaterfallApp(QMainWindow):
     def open_settings(self):
         dlg = SettingsDialog(self)
         dlg.exec_()
-
-    def set_gradient(self, n):
-        self.current_gradient = n
-        try:
-            # [修復] 建立一個隱形的梯度編輯器，直接產生 256 階的顏色映射表 (LUT)
-            grad = pg.graphicsItems.GradientEditorItem.GradientEditorItem()
-            grad.loadPreset(n)
-            lut = grad.getLookupTable(256)
-            
-            # 直接把顏色表餵給影像，不需要依賴實體的 Colorbar UI
-            self.imageitem.setLookupTable(lut)
-        except Exception as e:
-            print(f"[Error] Color mapping failed: {e}")
 
     def configure_nmea_output(self, e, p):
         self.nmea_output_enabled, self.nmea_port = e, p
