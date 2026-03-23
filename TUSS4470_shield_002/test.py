@@ -562,7 +562,7 @@ class SettingsDialog(QDialog):
         
         scroll_layout.addWidget(sonar_group)
 
-        # 3. DISPLAY Group (選項已統整)
+        # 3. DISPLAY Group
         disp_group = QGroupBox("DISPLAY")
         disp_layout = QFormLayout(disp_group)
         disp_layout.setContentsMargins(5, 5, 5, 5)
@@ -571,7 +571,6 @@ class SettingsDialog(QDialog):
         self.large_depth_checkbox = QCheckBox("Show Depth")
         self.large_depth_checkbox.setChecked(self.main_app.large_depth_visible)
         
-        # 統一的三個選項
         combo_items = ["Combination (Auto+Max)", "Threshold Only (Auto)", "Override Only (Max)"]
         
         self.overlay_mode_combo = QComboBox()
@@ -749,7 +748,6 @@ class SettingsDialog(QDialog):
         self.main_app.large_depth_visible = self.large_depth_checkbox.isChecked()
         self.main_app.depth_overlay.setVisible(self.main_app.large_depth_visible)
         
-        # 儲存顯示與測繪的模式設定
         self.main_app.depth_overlay_mode = self.overlay_mode_combo.currentText()
         self.main_app.show_depth_line = self.show_line_checkbox.isChecked()
         self.main_app.depth_line_mode = self.line_mode_combo.currentText()
@@ -784,7 +782,6 @@ class WaterfallApp(QMainWindow):
         self.nmea_port = 10110
         self.large_depth_visible = True
         
-        # 預設為 Combination
         self.depth_overlay_mode = "Combination (Auto+Max)"
         self.show_depth_line = True
         self.depth_line_mode = "Combination (Auto+Max)"
@@ -801,10 +798,14 @@ class WaterfallApp(QMainWindow):
         self.current_cycles = 16
         self.blind_zone_val = 30
         self.operating_mode = 1 # 0: 40kHz, 1: 200kHz, 2: Dual
-        
-        # [新增] Colorbar 控制變數
-        self.auto_color_enabled = True  # 預設開啟半自動模式
-        self.fixed_noise_floor = 10     # 鎖定底噪數值 (0~255)，10 是一個很乾淨的深色背景值
+
+        # -------------------------------------------------------------
+        # [新增] 手動/自動色彩控制變數
+        # -------------------------------------------------------------
+        self.auto_color_enabled = True
+        self.color_min_val = 10
+        self.color_max_val = 150
+        # -------------------------------------------------------------
 
         self.tvg_curve = np.linspace(1.0, TVG_STRENGTH, self.current_max_samples)
 
@@ -900,6 +901,76 @@ class WaterfallApp(QMainWindow):
         self.lbl_footer_ovr = QLabel("Override: ---")
         self.lbl_footer_ovr.setObjectName("footerLabel")   
         
+        footer_layout.addWidget(self.lbl_footer_depth) 
+        footer_layout.addWidget(self.lbl_footer_ovr)   
+
+        # -------------------------------------------------------------
+        # [新增] 將 Color Mode 與 Min/Max 按鈕放在 Override 後方
+        # -------------------------------------------------------------
+        footer_layout.addSpacing(15) # 與前面的字拉開一點距離
+
+        # 定義跟底部文字列相同色調的按鈕樣式
+        footer_btn_style = f"""
+            QPushButton {{ background-color: transparent; color: #aaa; border: 1px solid #444; border-radius: 2px; padding: 2px 6px; font-size: {int(10 * UI_SCALE_FACTOR)}px; font-weight: bold; }}
+            QPushButton:hover {{ background-color: #333; color: white; border: 1px solid #666; }}
+            QPushButton:pressed {{ background-color: #555; color: #00aaff; }}
+        """
+
+        # Auto/Manual 切換按鈕
+        self.btn_color_mode = QPushButton("Color: Auto")
+        self.btn_color_mode.setStyleSheet(footer_btn_style)
+        self.btn_color_mode.setCursor(Qt.PointingHandCursor)
+        self.btn_color_mode.clicked.connect(self.toggle_color_mode)
+        footer_layout.addWidget(self.btn_color_mode)
+
+        # 建立一個隱藏的 Widget 來裝 +/- 控制項
+        self.color_ctrl_widget = QWidget()
+        cc_layout = QHBoxLayout(self.color_ctrl_widget)
+        cc_layout.setContentsMargins(5, 0, 0, 0)
+        cc_layout.setSpacing(2)
+
+        # Min 控制組
+        self.lbl_cmin = QLabel(f"Min: {self.color_min_val}")
+        self.lbl_cmin.setObjectName("footerLabel")
+        self.btn_cmin_dec = QPushButton("-")
+        self.btn_cmin_dec.setStyleSheet(footer_btn_style)
+        self.btn_cmin_dec.setCursor(Qt.PointingHandCursor)
+        self.btn_cmin_dec.clicked.connect(lambda: self.adj_color_min(-5))
+        
+        self.btn_cmin_inc = QPushButton("+")
+        self.btn_cmin_inc.setStyleSheet(footer_btn_style)
+        self.btn_cmin_inc.setCursor(Qt.PointingHandCursor)
+        self.btn_cmin_inc.clicked.connect(lambda: self.adj_color_min(5))
+        
+        cc_layout.addWidget(self.lbl_cmin)
+        cc_layout.addWidget(self.btn_cmin_dec)
+        cc_layout.addWidget(self.btn_cmin_inc)
+        
+        cc_layout.addSpacing(10)
+
+        # Max 控制組
+        self.lbl_cmax = QLabel(f"Max: {self.color_max_val}")
+        self.lbl_cmax.setObjectName("footerLabel")
+        self.btn_cmax_dec = QPushButton("-")
+        self.btn_cmax_dec.setStyleSheet(footer_btn_style)
+        self.btn_cmax_dec.setCursor(Qt.PointingHandCursor)
+        self.btn_cmax_dec.clicked.connect(lambda: self.adj_color_max(-10))
+        
+        self.btn_cmax_inc = QPushButton("+")
+        self.btn_cmax_inc.setStyleSheet(footer_btn_style)
+        self.btn_cmax_inc.setCursor(Qt.PointingHandCursor)
+        self.btn_cmax_inc.clicked.connect(lambda: self.adj_color_max(10))
+
+        cc_layout.addWidget(self.lbl_cmax)
+        cc_layout.addWidget(self.btn_cmax_dec)
+        cc_layout.addWidget(self.btn_cmax_inc)
+
+        footer_layout.addWidget(self.color_ctrl_widget)
+        self.color_ctrl_widget.hide() # 預設 Auto 模式，所以隱藏 +/-
+        # -------------------------------------------------------------
+
+        footer_layout.addStretch()  
+        
         self.lbl_cpu = QLabel("CPU: --%")
         self.lbl_cpu.setObjectName("footerLabel") 
         self.lbl_temp = QLabel("Temp: --°C")
@@ -909,9 +980,6 @@ class WaterfallApp(QMainWindow):
         self.lbl_ram = QLabel("RAM: --%")
         self.lbl_ram.setObjectName("footerLabel")
 
-        footer_layout.addWidget(self.lbl_footer_depth) 
-        footer_layout.addWidget(self.lbl_footer_ovr)   
-        footer_layout.addStretch()  
         footer_layout.addWidget(self.lbl_cpu)  
         footer_layout.addWidget(self.lbl_temp) 
         footer_layout.addWidget(self.lbl_fan)  
@@ -924,13 +992,6 @@ class WaterfallApp(QMainWindow):
         self.stat_timer.setInterval(1000) 
         self.stat_timer.timeout.connect(self.update_system_stats)
         self.stat_timer.start()
-
-        self.colorbar = pg.HistogramLUTWidget()
-        self.colorbar.setImageItem(self.imageitem)
-        try:
-            self.colorbar.item.gradient.loadPreset(self.current_gradient)
-        except Exception:
-            pass
 
         sidebar = QFrame()
         sidebar.setObjectName("sidebarFrame")
@@ -978,33 +1039,11 @@ class WaterfallApp(QMainWindow):
         self.btn_range.clicked.connect(self.show_range_menu)
         side_layout.addWidget(self.btn_range)
         
-        # -------------------------------------------------------------
-        # [修改] 完美解決高度不夠！將 Color 和 Auto 合併在同一列 (並排)
-        # -------------------------------------------------------------
-        color_widget = QWidget()
-        color_layout = QHBoxLayout(color_widget)
-        color_layout.setContentsMargins(0, 0, 0, 0)
-        color_layout.setSpacing(0)
-
-        # 左半邊：選擇調色盤
         self.btn_color = QPushButton("Color")
         self.btn_color.setProperty("class", "sidebar_btn")
         self.btn_color.setFixedHeight(SIDEBAR_BTN_HEIGHT)
-        # 加上右邊框當作分隔線，稍微縮小一點字體適應半寬度
-        self.btn_color.setStyleSheet(f"QPushButton {{ border-right: 1px solid #3e4145; font-size: {SIDEBAR_FONT_SIZE - 2}px; }}")
         self.btn_color.clicked.connect(self.show_color_menu)
-
-        # 右半邊：Auto / Manu 切換
-        self.btn_auto_color = QPushButton("Auto")
-        self.btn_auto_color.setProperty("class", "sidebar_btn")
-        self.btn_auto_color.setFixedHeight(SIDEBAR_BTN_HEIGHT)
-        self.btn_auto_color.setStyleSheet(f"QPushButton {{ font-size: {SIDEBAR_FONT_SIZE - 2}px; }}")
-        self.btn_auto_color.clicked.connect(self.toggle_auto_color)
-
-        color_layout.addWidget(self.btn_color)
-        color_layout.addWidget(self.btn_auto_color)
-        side_layout.addWidget(color_widget)
-        # -------------------------------------------------------------
+        side_layout.addWidget(self.btn_color)
 
         self.lna_widget = GainGaugeWidget()
         self.lna_widget.set_value(self.lna_gain)
@@ -1027,12 +1066,42 @@ class WaterfallApp(QMainWindow):
         self.btn_settings.setFixedHeight(SIDEBAR_BTN_HEIGHT)
         self.btn_settings.clicked.connect(self.open_settings)
         side_layout.addWidget(self.btn_settings)
+        
         self.btn_connect = QPushButton("Connect")
         self.btn_connect.setProperty("class", "sidebar_btn")
         self.btn_connect.setFixedHeight(SIDEBAR_BTN_HEIGHT)
         self.btn_connect.clicked.connect(self.handle_main_connect)
         side_layout.addWidget(self.btn_connect)
+        
         main_layout.addWidget(sidebar)
+
+    # -------------------------------------------------------------
+    # [新增] Footer 手動色彩控制的功能邏輯
+    # -------------------------------------------------------------
+    def toggle_color_mode(self):
+        self.auto_color_enabled = not self.auto_color_enabled
+        if self.auto_color_enabled:
+            self.btn_color_mode.setText("Color: Auto")
+            self.color_ctrl_widget.hide()
+        else:
+            self.btn_color_mode.setText("Color: Manual")
+            self.color_ctrl_widget.show()
+            self.update_plot_from_buffer() # 強制刷新畫面
+
+    def adj_color_min(self, delta):
+        self.color_min_val += delta
+        if self.color_min_val < 0: self.color_min_val = 0
+        if self.color_min_val >= self.color_max_val: self.color_min_val = self.color_max_val - 1
+        self.lbl_cmin.setText(f"Min: {self.color_min_val}")
+        if not self.auto_color_enabled: self.update_plot_from_buffer()
+
+    def adj_color_max(self, delta):
+        self.color_max_val += delta
+        if self.color_max_val > 255: self.color_max_val = 255
+        if self.color_max_val <= self.color_min_val: self.color_max_val = self.color_min_val + 1
+        self.lbl_cmax.setText(f"Max: {self.color_max_val}")
+        if not self.auto_color_enabled: self.update_plot_from_buffer()
+    # -------------------------------------------------------------
 
     def change_resolution(self, new_samples):
         print(f"[System] Changing resolution to {new_samples} samples")
@@ -1093,22 +1162,6 @@ class WaterfallApp(QMainWindow):
         center_y = window_geo.y() + (window_geo.height() - popup_height) // 2
         popup.move(center_x, center_y)
         popup.show()
-        
-    # [新增] 處理 Color Mode 切換邏輯
-    def toggle_auto_color(self):
-        self.auto_color_enabled = not self.auto_color_enabled
-        if self.auto_color_enabled:
-            self.btn_auto_color.setText("Color: Auto")
-            # 恢復一般按鈕樣式
-            self.btn_auto_color.setProperty("class", "sidebar_btn")
-        else:
-            self.btn_auto_color.setText("Color: Manu")
-            # 借用 connect_active 的紅色左邊框樣式，提醒使用者現在是手動模式
-            self.btn_auto_color.setProperty("class", "connect_active")
-            
-        # 強制刷新按鈕的 CSS 樣式
-        self.btn_auto_color.style().unpolish(self.btn_auto_color)
-        self.btn_auto_color.style().polish(self.btn_auto_color)
 
     def show_range_menu(self):
         raw_options = RANGE_OPTIONS_AIR if self.current_speed == AIR_SPEED else RANGE_OPTIONS_WATER
@@ -1154,12 +1207,9 @@ class WaterfallApp(QMainWindow):
         min_total_depth_m = MIN_VIEW_METERS_AIR if self.current_speed == AIR_SPEED else MIN_VIEW_METERS_WATER
         min_allowed_samples = (min_total_depth_m * 100.0) / SAMPLE_RESOLUTION
         
-        # [修改] 改用「比例縮放」，每次減少 20% 的視野 (等於放大畫面)
         next_samples = self.current_zoom_samples * 0.8
         
         if next_samples <= min_allowed_samples:
-            # 如果已經到達或非常接近極限，就直接 return 不做事
-            # 這樣 Y 軸就不會發生無意義的重繪
             if abs(self.current_zoom_samples - min_allowed_samples) < 1.0:
                 return 
             self.current_zoom_samples = min_allowed_samples
@@ -1169,14 +1219,12 @@ class WaterfallApp(QMainWindow):
         self.update_zoom_range()
 
     def zoom_out(self):
-        # 避免到達最大值時重複觸發
         if self.current_zoom_samples >= self.current_max_samples:
             if self.current_zoom_samples != self.current_max_samples:
                 self.current_zoom_samples = self.current_max_samples
                 self.update_zoom_range()
             return
             
-        # [修改] 每次擴大 25% 視野 (對應 0.8 的反向操作)
         next_samples = self.current_zoom_samples * 1.25
         
         if next_samples >= self.current_max_samples:
@@ -1196,9 +1244,6 @@ class WaterfallApp(QMainWindow):
 
         total_depth_m = (self.current_zoom_samples * SAMPLE_RESOLUTION) / 100.0
         
-        # -------------------------------------------------------------
-        # [新增] Nice Number 演算法：尋找最完美的整數間距 (0.1, 0.2, 0.5, 1, 2...)
-        # -------------------------------------------------------------
         raw_step = total_depth_m / 4.0
         if raw_step <= 0:
             raw_step = 0.1
@@ -1215,14 +1260,12 @@ class WaterfallApp(QMainWindow):
         else:
             nice_step_m = 10.0 * magnitude
 
-        # 根據漂亮的間距，生成刻度陣列
         tick_depths = []
         current_d = 0.0
-        while current_d <= total_depth_m * 1.01: # 給予 1% 的容差避免漏掉最後一條線
+        while current_d <= total_depth_m * 1.01:
             tick_depths.append(current_d)
             current_d += nice_step_m
 
-        # 動態決定小數點位數 (避免整數時還顯示 .0，或者刻度太小時小數點不夠)
         if nice_step_m >= 1.0:
             fmt = "{:.0f}"
         elif nice_step_m >= 0.1:
@@ -1230,32 +1273,26 @@ class WaterfallApp(QMainWindow):
         else:
             fmt = "{:.2f}"
 
-        # 將公尺換算回點數以供繪圖
         ticks = []
         for d in tick_depths:
             idx = (d * 100.0) / SAMPLE_RESOLUTION
             ticks.append((idx, fmt.format(d)))
 
-        # -------------------------------------------------------------
-
         ax = self.waterfall.getAxis("right")
         ax.setTicks([ticks])
         ax.setTickFont(QFont("Arial", AXIS_FONT_SIZE))
 
-        # 移除舊的虛線並畫上新的
         for item in self.waterfall.items():
             if isinstance(item, pg.InfiniteLine) and item != self.depth_line:
                 self.waterfall.removeItem(item)
                 
         for idx, label in ticks:
-            # 確保不會畫到畫面外面
             if 0 < idx < self.current_zoom_samples: 
                 line = pg.InfiniteLine(
                     pos=idx, angle=0, pen=pg.mkPen(color=(150, 150, 150, 150), style=Qt.DashLine)
                 )
                 self.waterfall.addItem(line)
 
-        # 確保初始覆疊文字存在
         color_hex = "#FFFFFF"
         display_val_m = 0.0
         freq_text = f"&nbsp;&nbsp;{40}kHz"
@@ -1297,47 +1334,30 @@ class WaterfallApp(QMainWindow):
 
         self.imageitem.setImage(self.data.T, autoLevels=False)
 
-        sigma = np.std(self.data)
-        mean = np.mean(self.data)
-        if sigma == 0:
-            sigma = 1
-        self.imageitem.setLevels((mean - 2 * sigma, mean + 2 * sigma))
-
-
         # -------------------------------------------------------------
-        # [修改] 方案一 + 方案三：半自動底噪鎖定 vs 純手動控制
+        # [修改] 結合 Auto(固定底噪) 與 Manual(自訂數值) 的畫圖邏輯
         # -------------------------------------------------------------
         if self.auto_color_enabled:
             sigma = np.std(self.data)
             mean = np.mean(self.data)
-            if sigma == 0:
-                sigma = 1
-                
-            # [方案三] 鎖定底噪 (Min Level)，動態峰值 (Max Level)
-            min_level = self.fixed_noise_floor 
-            max_level = mean + 2.5 * sigma  # 2.5 倍標準差是個很好的強訊號閥值
+            if sigma == 0: sigma = 1
             
-            # 安全保護，避免邏輯錯誤
-            if max_level <= min_level:
-                max_level = min_level + 1
-                
+            min_level = 10 # 鎖定一個漂亮的深色背景值
+            max_level = mean + 2.5 * sigma
+            if max_level <= min_level: max_level = min_level + 1
+            
             self.imageitem.setLevels((min_level, max_level))
-        
-        # 如果 self.auto_color_enabled 是 False (手動模式)
-        # 我們就「什麼都不做」！
-        # 這樣右側的 HistogramLUTWidget 就可以任由您用滑鼠上下拖曳來改變顏色映射！
+        else:
+            # 聽從手動模式按鈕加減出來的數值
+            self.imageitem.setLevels((self.color_min_val, self.color_max_val))
         # -------------------------------------------------------------
 
         depth_m = (depth_index * SAMPLE_RESOLUTION) / 100.0
         ovr_m = (override_idx * SAMPLE_RESOLUTION) / 100.0
 
-        # 基本的盲區過濾
         not_blind = depth_index > PYTHON_IGNORE_INDEX
         diff = abs(int(depth_index) - int(override_idx))
         
-        # --- 判斷資料來源與可靠性 ---
-        
-        # 1. 決定要在「文字」上顯示什麼
         overlay_target_idx = np.nan
         overlay_reliable = False
         
@@ -1350,12 +1370,10 @@ class WaterfallApp(QMainWindow):
                 overlay_target_idx = depth_index
                 overlay_reliable = True
         elif self.depth_overlay_mode == "Override Only (Max)":
-            # Override 通常不受硬體盲區影響，但我們還是加個基本判斷
             if override_idx > PYTHON_IGNORE_INDEX: 
                 overlay_target_idx = override_idx
                 overlay_reliable = True
 
-        # 2. 決定要在「折線圖」上畫什麼
         line_target_idx = np.nan
         
         if self.depth_line_mode == "Combination (Auto+Max)":
@@ -1368,7 +1386,6 @@ class WaterfallApp(QMainWindow):
             if override_idx > PYTHON_IGNORE_INDEX:
                 line_target_idx = override_idx
 
-        # 更新折線圖歷史紀錄
         self.depth_history = np.roll(self.depth_history, -1)
         self.depth_history[-1] = line_target_idx
         
@@ -1380,11 +1397,9 @@ class WaterfallApp(QMainWindow):
         else:
             self.depth_line.hide()
 
-        # 更新大字體顯示
         if self.large_depth_visible:
             color_hex = "#FFFFFF" if overlay_reliable else "rgba(255, 255, 255, 0.2)"
             
-            # 如果是 nan，顯示 0.0，不然轉換成公尺
             if np.isnan(overlay_target_idx):
                 display_val_m = 0.0
             else:
@@ -1394,7 +1409,6 @@ class WaterfallApp(QMainWindow):
             html_str = f"""<div style="text-align: left; line-height: 90%; font-family: 'Malgun Gothic';"><span style="font-size: {OVERLAY_FONT_L}pt; font-weight: 600; color: {color_hex};">{display_val_m:.1f}</span><span style="font-size: {OVERLAY_FONT_M}pt; font-weight: 600; color: {color_hex};">m</span><br><span style="font-size: {OVERLAY_FONT_S}pt; color: #cccccc; font-weight: 600;">{freq_text}</span></div>"""
             self.depth_overlay.setHtml(html_str)
 
-        # 狀態列永遠顯示原始數據，方便除錯
         self.lbl_footer_depth.setText(f"Depth: {depth_m * 100:.0f} cm")
         self.lbl_footer_ovr.setText(f"Override: {ovr_m * 100:.0f} cm")
         
