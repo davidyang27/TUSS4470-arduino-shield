@@ -993,6 +993,8 @@ class WaterfallApp(QMainWindow):
         self.stat_timer.timeout.connect(self.update_system_stats)
         self.stat_timer.start()
 
+        self.set_gradient(self.current_gradient)
+        
         sidebar = QFrame()
         sidebar.setObjectName("sidebarFrame")
         sidebar.setFixedWidth(int(110 * UI_SCALE_FACTOR))
@@ -1543,7 +1545,16 @@ class WaterfallApp(QMainWindow):
 
     def set_gradient(self, n):
         self.current_gradient = n
-        self.colorbar.item.gradient.loadPreset(n)
+        try:
+            # [修復] 建立一個隱形的梯度編輯器，直接產生 256 階的顏色映射表 (LUT)
+            grad = pg.graphicsItems.GradientEditorItem.GradientEditorItem()
+            grad.loadPreset(n)
+            lut = grad.getLookupTable(256)
+            
+            # 直接把顏色表餵給影像，不需要依賴實體的 Colorbar UI
+            self.imageitem.setLookupTable(lut)
+        except Exception as e:
+            print(f"[Error] Color mapping failed: {e}")
 
     def configure_nmea_output(self, e, p):
         self.nmea_output_enabled, self.nmea_port = e, p
