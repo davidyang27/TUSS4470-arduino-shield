@@ -977,20 +977,33 @@ class WaterfallApp(QMainWindow):
         self.btn_range.setFixedHeight(SIDEBAR_BTN_HEIGHT)
         self.btn_range.clicked.connect(self.show_range_menu)
         side_layout.addWidget(self.btn_range)
+        
+        # -------------------------------------------------------------
+        # [修改] 完美解決高度不夠！將 Color 和 Auto 合併在同一列 (並排)
+        # -------------------------------------------------------------
+        color_widget = QWidget()
+        color_layout = QHBoxLayout(color_widget)
+        color_layout.setContentsMargins(0, 0, 0, 0)
+        color_layout.setSpacing(0)
+
+        # 左半邊：選擇調色盤
         self.btn_color = QPushButton("Color")
         self.btn_color.setProperty("class", "sidebar_btn")
         self.btn_color.setFixedHeight(SIDEBAR_BTN_HEIGHT)
+        # 加上右邊框當作分隔線，稍微縮小一點字體適應半寬度
+        self.btn_color.setStyleSheet(f"QPushButton {{ border-right: 1px solid #3e4145; font-size: {SIDEBAR_FONT_SIZE - 2}px; }}")
         self.btn_color.clicked.connect(self.show_color_menu)
-        side_layout.addWidget(self.btn_color)
-        
-        # -------------------------------------------------------------
-        # [新增] Auto/Manual Color 切換按鈕
-        # -------------------------------------------------------------
-        self.btn_auto_color = QPushButton("Color: Auto")
+
+        # 右半邊：Auto / Manu 切換
+        self.btn_auto_color = QPushButton("Auto")
         self.btn_auto_color.setProperty("class", "sidebar_btn")
         self.btn_auto_color.setFixedHeight(SIDEBAR_BTN_HEIGHT)
+        self.btn_auto_color.setStyleSheet(f"QPushButton {{ font-size: {SIDEBAR_FONT_SIZE - 2}px; }}")
         self.btn_auto_color.clicked.connect(self.toggle_auto_color)
-        side_layout.addWidget(self.btn_auto_color)
+
+        color_layout.addWidget(self.btn_color)
+        color_layout.addWidget(self.btn_auto_color)
+        side_layout.addWidget(color_widget)
         # -------------------------------------------------------------
 
         self.lna_widget = GainGaugeWidget()
