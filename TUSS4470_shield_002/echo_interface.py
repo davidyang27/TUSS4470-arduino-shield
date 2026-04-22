@@ -740,16 +740,22 @@ class SettingsDialog(QDialog):
             pass 
 
         self.main_app.operating_mode = self.mode_combo.currentIndex()
-        self.main_app.set_sample_delay(new_delay)
 
+        # -------------------------------------------------------------
+        # [關鍵修復] 必須先更新「聲速」，再更新「取樣延遲與盲區計算」！
+        # -------------------------------------------------------------
+        # 1. 先判斷並更新環境聲速 (讓全域變數 SAMPLE_RESOLUTION 變成最新的水速/空速)
         speed = AIR_SPEED if self.speed_dropdown.currentIndex() == 0 else WATER_SPEED
         if speed != self.main_app.current_speed:
             self.main_app.set_sound_speed(speed)
+            
+        # 2. 再呼叫 set_sample_delay，此時裡面的盲區公分轉點數，就會用到正確的 SAMPLE_RESOLUTION 了！
+        self.main_app.set_sample_delay(new_delay)
+        # -------------------------------------------------------------
 
         self.main_app.large_depth_visible = self.large_depth_checkbox.isChecked()
         self.main_app.depth_overlay.setVisible(self.main_app.large_depth_visible)
         
-        # 儲存顯示與測繪的模式設定
         self.main_app.depth_overlay_mode = self.overlay_mode_combo.currentText()
         self.main_app.show_depth_line = self.show_line_checkbox.isChecked()
         self.main_app.depth_line_mode = self.line_mode_combo.currentText()
