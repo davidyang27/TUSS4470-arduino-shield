@@ -298,31 +298,56 @@ class RangePopup(BasePopup):
         self.close()
 
 # -------------------------------------------------------------
-# [新增] 專屬的色彩與對比度控制小視窗 (浮動工具視窗)
+# [修改] 專屬的色彩與對比度控制小視窗 (支援自訂超大標題列)
 # -------------------------------------------------------------
 class ColorControlDialog(QDialog):
     def __init__(self, parent):
         super().__init__(parent)
         self.main_app = parent
-        self.setWindowTitle("Display Control")
-        # 設定為浮動工具視窗，不會阻擋主程式操作
-        self.setWindowFlags(Qt.Tool | Qt.WindowStaysOnTopHint)
+        # 取消預設視窗邊框，完全自訂
+        self.setWindowFlags(Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
+        self.drag_pos = None
         
         lbl_size = int(12 * UI_SCALE_FACTOR)
         self.setStyleSheet(
             f"""
-            QDialog {{ background-color: #2b2b2b; border: 1px solid #555; color: #e0e0e0; font-family: 'Malgun Gothic'; }}
+            QDialog {{ background-color: #2b2b2b; border: 2px solid #555; color: #e0e0e0; font-family: 'Malgun Gothic'; }}
             QLabel {{ color: #e0e0e0; font-weight: bold; font-size: {lbl_size}px; }}
-            QComboBox {{ background-color: #3a3a3a; border: 1px solid #555; color: white; padding: 2px 4px; font-size: {lbl_size}px; }}
+            QComboBox {{ background-color: #3a3a3a; border: 1px solid #555; color: white; padding: 2px 4px; font-size: {lbl_size}px; min-height: {int(25*UI_SCALE_FACTOR)}px; }}
             QPushButton {{ background-color: #444; border: 1px solid #666; color: white; padding: 4px; border-radius: 3px; font-weight: bold; font-size: {lbl_size}px; }}
             QPushButton:hover {{ background-color: #555; border-color: #777; }}
             QPushButton:disabled {{ background-color: #222; color: #555; border-color: #333; }}
         """
         )
 
-        layout = QVBoxLayout(self)
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
+
+        # 建立防誤觸的「超大自訂標題列」
+        title_bar = QWidget()
+        title_bar.setStyleSheet("background-color: #1a1a1a; border-bottom: 1px solid #555;")
+        t_layout = QHBoxLayout(title_bar)
+        t_layout.setContentsMargins(10, 5, 5, 5)
+        
+        t_lbl = QLabel("Display Control")
+        t_lbl.setStyleSheet("color: white; font-weight: bold; border: none;")
+        
+        btn_close = QPushButton("✕")
+        btn_close.setFixedSize(int(50 * UI_SCALE_FACTOR), int(35 * UI_SCALE_FACTOR)) # 超大的關閉鈕
+        btn_close.setStyleSheet("QPushButton { background-color: #d32f2f; color: white; font-size: 16px; border-radius: 4px; } QPushButton:hover { background-color: #f44336; }")
+        btn_close.clicked.connect(self.close)
+        
+        t_layout.addWidget(t_lbl)
+        t_layout.addStretch()
+        t_layout.addWidget(btn_close)
+        main_layout.addWidget(title_bar)
+
+        # 主要內容區
+        content_widget = QWidget()
+        layout = QVBoxLayout(content_widget)
         layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(8)
+        layout.setSpacing(10)
 
         # 1. 選擇調色盤
         pal_layout = QHBoxLayout()
@@ -336,6 +361,7 @@ class ColorControlDialog(QDialog):
         
         # 2. Auto / Manual 切換按鈕
         self.btn_mode = QPushButton()
+        self.btn_mode.setFixedHeight(int(35 * UI_SCALE_FACTOR))
         self.btn_mode.clicked.connect(self.toggle_mode)
         layout.addWidget(self.btn_mode)
 
@@ -343,13 +369,13 @@ class ColorControlDialog(QDialog):
         min_layout = QHBoxLayout()
         min_layout.addWidget(QLabel("Min:"))
         self.btn_min_dec = QPushButton("-")
-        self.btn_min_dec.setFixedWidth(int(30 * UI_SCALE_FACTOR))
+        self.btn_min_dec.setFixedSize(int(40 * UI_SCALE_FACTOR), int(30 * UI_SCALE_FACTOR))
         self.btn_min_dec.clicked.connect(lambda: self.adj_min(-5))
         self.lbl_min = QLabel("0")
         self.lbl_min.setAlignment(Qt.AlignCenter)
-        self.lbl_min.setFixedWidth(int(40 * UI_SCALE_FACTOR))
+        self.lbl_min.setFixedWidth(int(50 * UI_SCALE_FACTOR))
         self.btn_min_inc = QPushButton("+")
-        self.btn_min_inc.setFixedWidth(int(30 * UI_SCALE_FACTOR))
+        self.btn_min_inc.setFixedSize(int(40 * UI_SCALE_FACTOR), int(30 * UI_SCALE_FACTOR))
         self.btn_min_inc.clicked.connect(lambda: self.adj_min(5))
         min_layout.addWidget(self.btn_min_dec)
         min_layout.addWidget(self.lbl_min)
@@ -360,25 +386,35 @@ class ColorControlDialog(QDialog):
         max_layout = QHBoxLayout()
         max_layout.addWidget(QLabel("Max:"))
         self.btn_max_dec = QPushButton("-")
-        self.btn_max_dec.setFixedWidth(int(30 * UI_SCALE_FACTOR))
+        self.btn_max_dec.setFixedSize(int(40 * UI_SCALE_FACTOR), int(30 * UI_SCALE_FACTOR))
         self.btn_max_dec.clicked.connect(lambda: self.adj_max(-10))
         self.lbl_max = QLabel("255")
         self.lbl_max.setAlignment(Qt.AlignCenter)
-        self.lbl_max.setFixedWidth(int(40 * UI_SCALE_FACTOR))
+        self.lbl_max.setFixedWidth(int(50 * UI_SCALE_FACTOR))
         self.btn_max_inc = QPushButton("+")
-        self.btn_max_inc.setFixedWidth(int(30 * UI_SCALE_FACTOR))
+        self.btn_max_inc.setFixedSize(int(40 * UI_SCALE_FACTOR), int(30 * UI_SCALE_FACTOR))
         self.btn_max_inc.clicked.connect(lambda: self.adj_max(10))
         max_layout.addWidget(self.btn_max_dec)
         max_layout.addWidget(self.lbl_max)
         max_layout.addWidget(self.btn_max_inc)
         layout.addLayout(max_layout)
 
+        main_layout.addWidget(content_widget)
         self.update_ui_state()
+
+    # 允許觸控或滑鼠按住標題列拖曳
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self.drag_pos = event.globalPos() - self.frameGeometry().topLeft()
+
+    def mouseMoveEvent(self, event):
+        if event.buttons() == Qt.LeftButton and self.drag_pos is not None:
+            self.move(event.globalPos() - self.drag_pos)
 
     def toggle_mode(self):
         self.main_app.auto_color_enabled = not self.main_app.auto_color_enabled
         self.update_ui_state()
-        self.main_app.update_plot_from_buffer() # 強制刷新畫面
+        self.main_app.update_plot_from_buffer()
 
     def update_ui_state(self):
         if self.main_app.auto_color_enabled:
@@ -388,7 +424,6 @@ class ColorControlDialog(QDialog):
             self.btn_min_inc.setEnabled(False)
             self.btn_max_dec.setEnabled(False)
             self.btn_max_inc.setEnabled(False)
-            # 在 Auto 模式下，數字會由外部的 Timer 呼叫 update_realtime_values 來刷新
         else:
             self.btn_mode.setText("Mode: MANUAL")
             self.btn_mode.setStyleSheet("background-color: #aa0000; color: white;")
@@ -396,7 +431,6 @@ class ColorControlDialog(QDialog):
             self.btn_min_inc.setEnabled(True)
             self.btn_max_dec.setEnabled(True)
             self.btn_max_inc.setEnabled(True)
-            # 切換到 Manual 時，立刻顯示手動設定的數值
             self.lbl_min.setText(str(self.main_app.color_min_val))
             self.lbl_max.setText(str(self.main_app.color_max_val))
 
@@ -414,7 +448,6 @@ class ColorControlDialog(QDialog):
         self.lbl_max.setText(str(self.main_app.color_max_val))
         self.main_app.update_plot_from_buffer()
 
-    # 由 Main App 每秒呼叫，用來在 Auto 模式下跳動顯示即時計算出的數值
     def update_realtime_values(self, cur_min, cur_max):
         if self.main_app.auto_color_enabled:
             self.lbl_min.setText(str(int(cur_min)))
@@ -531,9 +564,11 @@ class SettingsDialog(QDialog):
     def __init__(self, parent):
         super().__init__(parent)
         self.main_app = parent
-        self.setWindowTitle("Config")
-        self.resize(int(340 * UI_SCALE_FACTOR), int(380 * UI_SCALE_FACTOR))
+        # 取消原生標題列
+        self.setWindowFlags(Qt.Dialog | Qt.FramelessWindowHint)
+        self.resize(int(360 * UI_SCALE_FACTOR), int(420 * UI_SCALE_FACTOR))
         self.echo_thr_val = self.main_app.saved_echo_thr
+        self.drag_pos = None
 
         lbl_size = int(11 * UI_SCALE_FACTOR)
         fixed_label_width = int(70 * UI_SCALE_FACTOR) 
@@ -541,7 +576,7 @@ class SettingsDialog(QDialog):
 
         self.setStyleSheet(
             f"""
-            QDialog {{ background-color: #2b2b2b; color: #e0e0e0; font-family: 'Malgun Gothic', Arial; }}
+            QDialog {{ background-color: #2b2b2b; color: #e0e0e0; font-family: 'Malgun Gothic', Arial; border: 2px solid #444; }}
             QLabel {{ color: #e0e0e0; font-weight: bold; font-size: {lbl_size}px; }}
             QGroupBox QLabel#fieldLabel {{ min-width: {fixed_label_width}px; max-width: {fixed_label_width}px; }}
             QCheckBox {{ font-size: {lbl_size}px; color: #e0e0e0; font-weight: bold; spacing: 5px; }}
@@ -549,7 +584,7 @@ class SettingsDialog(QDialog):
             QComboBox, QLineEdit {{ background-color: #3a3a3a; border: 1px solid #555; color: white; padding: 2px 4px; border-radius: 2px; font-size: {lbl_size}px; min-height: {int(20 * UI_SCALE_FACTOR)}px; }}
             QComboBox::drop-down {{ subcontrol-origin: padding; subcontrol-position: top right; width: {int(20 * UI_SCALE_FACTOR)}px; border-left: 1px solid #555; background-color: #444; }}
             QComboBox::down-arrow {{ width: 0px; height: 0px; border-left: 4px solid transparent; border-right: 4px solid transparent; border-top: 5px solid #ffffff; margin-top: 1px; margin-right: 1px; }}
-            QPushButton {{ background-color: #444; border: 1px solid #666; color: white; padding: 4px 8px; border-radius: 3px; font-weight: bold; font-size: {SETTINGS_FONT_SIZE}px; }}
+            QPushButton {{ background-color: #444; border: 1px solid #666; color: white; padding: 6px 12px; border-radius: 3px; font-weight: bold; font-size: {SETTINGS_FONT_SIZE}px; }}
             QPushButton:hover {{ background-color: #555; border-color: #777; }}
             QPushButton#applyBtn {{ background-color: #0078d7; border-color: #005a9e; }}
             QPushButton#applyBtn:hover {{ background-color: #006cbd; }}
@@ -568,8 +603,30 @@ class SettingsDialog(QDialog):
         )
 
         main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(5, 5, 5, 5)
-        main_layout.setSpacing(5)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
+
+        # -------------------------------------------------------------
+        # 自訂大尺寸標題列
+        # -------------------------------------------------------------
+        title_bar = QWidget()
+        title_bar.setStyleSheet("background-color: #1a1a1a; border-bottom: 1px solid #444;")
+        t_layout = QHBoxLayout(title_bar)
+        t_layout.setContentsMargins(15, 5, 5, 5)
+        
+        t_lbl = QLabel("System Settings")
+        t_lbl.setStyleSheet("color: white; font-weight: bold; font-size: 16px; border: none;")
+        
+        btn_close = QPushButton("✕")
+        btn_close.setFixedSize(int(60 * UI_SCALE_FACTOR), int(40 * UI_SCALE_FACTOR)) # 超大按鈕
+        btn_close.setStyleSheet("QPushButton { background-color: #d32f2f; color: white; font-size: 18px; border-radius: 4px; } QPushButton:hover { background-color: #f44336; }")
+        btn_close.clicked.connect(self.close)
+        
+        t_layout.addWidget(t_lbl)
+        t_layout.addStretch()
+        t_layout.addWidget(btn_close)
+        main_layout.addWidget(title_bar)
+        # -------------------------------------------------------------
         
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -578,7 +635,7 @@ class SettingsDialog(QDialog):
         
         scroll_layout = QVBoxLayout(scroll_content)
         scroll_layout.setSpacing(int(8 * UI_SCALE_FACTOR))
-        scroll_layout.setContentsMargins(2, 2, 2, 2)
+        scroll_layout.setContentsMargins(10, 10, 10, 10)
 
         # 1. Connection Group
         conn_group = QGroupBox("CONNECTION")
@@ -762,7 +819,7 @@ class SettingsDialog(QDialog):
         quit_btn = QPushButton("QUIT APPLICATION")
         quit_btn.setObjectName("quitBtn")
         quit_btn.setCursor(Qt.PointingHandCursor)
-        quit_btn.setFixedHeight(int(35 * UI_SCALE_FACTOR))
+        quit_btn.setFixedHeight(int(40 * UI_SCALE_FACTOR))
         quit_btn.clicked.connect(self.handle_quit_app)
         scroll_layout.addWidget(quit_btn)
         
@@ -770,16 +827,22 @@ class SettingsDialog(QDialog):
         main_layout.addWidget(scroll)
 
         btn_layout = QHBoxLayout()
-        btn_layout.setContentsMargins(5, 5, 5, 5)
-        apply_btn = QPushButton("Apply")
+        btn_layout.setContentsMargins(10, 10, 10, 10)
+        apply_btn = QPushButton("Apply Settings")
+        apply_btn.setFixedHeight(int(35 * UI_SCALE_FACTOR))
         apply_btn.setObjectName("applyBtn")
         apply_btn.clicked.connect(self.handle_apply)
-        cancel_btn = QPushButton("Cancel")
-        cancel_btn.clicked.connect(self.close)
         btn_layout.addStretch()
         btn_layout.addWidget(apply_btn)
-        btn_layout.addWidget(cancel_btn)
         main_layout.addLayout(btn_layout)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self.drag_pos = event.globalPos() - self.frameGeometry().topLeft()
+
+    def mouseMoveEvent(self, event):
+        if event.buttons() == Qt.LeftButton and self.drag_pos is not None:
+            self.move(event.globalPos() - self.drag_pos)
 
     def decrease_echo_thr(self):
         if self.echo_thr_val > 1:
@@ -891,19 +954,20 @@ class WaterfallApp(QMainWindow):
         self.current_sample_delay = CURRENT_SAMPLE_DELAY_US
 
         self.current_cycles = 16
-        self.blind_zone_val = 30
+        self.blind_zone_val = 60
         self.operating_mode = 1 # 0: 40kHz, 1: 200kHz, 2: Dual
 
-        # -------------------------------------------------------------
         # 色彩控制狀態變數
-        # -------------------------------------------------------------
         self.auto_color_enabled = True
         self.color_min_val = 10
         self.color_max_val = 150
-        self.current_display_min = 10  # 暫存當下真正餵給畫面的值
+        self.current_display_min = 10  
         self.current_display_max = 150
-        self.color_dialog = None       # 控制視窗的實體
-        # -------------------------------------------------------------
+        self.color_dialog = None
+        
+        #避免畫面閃爍的 EMA (指數移動平均) 變數
+        self.ema_mean = None
+        self.ema_sigma = None
 
         self.tvg_curve = np.linspace(1.0, TVG_STRENGTH, self.current_max_samples)
 
@@ -937,7 +1001,10 @@ class WaterfallApp(QMainWindow):
         """
         )
 
-        self.data = np.zeros((MAX_ROWS, self.current_max_samples))
+        # -------------------------------------------------------------
+        # [修改] 讓初始資料填入底噪數值，而非 0，大幅穩定開機顏色計算
+        # -------------------------------------------------------------
+        self.data = np.full((MAX_ROWS, self.current_max_samples), self.color_min_val, dtype=np.float64)
         self.depth_history = np.full(MAX_ROWS, np.nan)
 
         central = QWidget()
@@ -1026,7 +1093,6 @@ class WaterfallApp(QMainWindow):
         self.stat_timer.timeout.connect(self.update_system_stats)
         self.stat_timer.start()
 
-        # 程式啟動時主動為瀑布圖套用 LUT
         self.set_gradient(self.current_gradient)
 
         sidebar = QFrame()
@@ -1075,15 +1141,11 @@ class WaterfallApp(QMainWindow):
         self.btn_range.clicked.connect(self.show_range_menu)
         side_layout.addWidget(self.btn_range)
         
-        # -------------------------------------------------------------
-        # [修改] 恢復單一的 Color 按鈕，用來呼叫浮動小視窗
-        # -------------------------------------------------------------
         self.btn_color = QPushButton("Color")
         self.btn_color.setProperty("class", "sidebar_btn")
         self.btn_color.setFixedHeight(SIDEBAR_BTN_HEIGHT)
         self.btn_color.clicked.connect(self.show_color_menu)
         side_layout.addWidget(self.btn_color)
-        # -------------------------------------------------------------
 
         self.lna_widget = GainGaugeWidget()
         self.lna_widget.set_value(self.lna_gain)
@@ -1118,12 +1180,16 @@ class WaterfallApp(QMainWindow):
     def change_resolution(self, new_samples):
         print(f"[System] Changing resolution to {new_samples} samples")
         self.current_max_samples = new_samples
-        self.data = np.zeros((MAX_ROWS, self.current_max_samples))
+        self.data = np.full((MAX_ROWS, self.current_max_samples), self.color_min_val, dtype=np.float64)
         self.depth_history = np.full(MAX_ROWS, np.nan)
         self.depth_line.setData(
             x=np.arange(MAX_ROWS), y=self.depth_history, connect="finite"
         )
         self.tvg_curve = np.linspace(1.0, TVG_STRENGTH, self.current_max_samples)
+        
+        # [新增] 重置平滑變數
+        self.ema_mean = None
+        self.ema_sigma = None
 
         if self.serial_thread and self.serial_thread.isRunning():
             cmd = struct.pack(">B H", ord("N"), new_samples)
@@ -1138,6 +1204,10 @@ class WaterfallApp(QMainWindow):
         self.current_sample_delay = delay_us
         SAMPLE_TIME = (delay_us + 3.4) * 1e-6
         SAMPLE_RESOLUTION = (self.current_speed * SAMPLE_TIME * 100) / 2
+        
+        # [新增] 重置平滑變數
+        self.ema_mean = None
+        self.ema_sigma = None
 
         if self.serial_thread and self.serial_thread.isRunning():
             val = int(delay_us)
@@ -1164,25 +1234,23 @@ class WaterfallApp(QMainWindow):
         self.update_zoom_range()
 
     def show_color_menu(self):
-        # 如果對話框還沒建立，就建立它
         if not hasattr(self, 'color_dialog') or self.color_dialog is None:
             self.color_dialog = ColorControlDialog(self)
         
-        # 顯示並拉到最上層
         if self.color_dialog.isVisible():
             self.color_dialog.raise_()
             self.color_dialog.activateWindow()
         else:
-            # 將視窗移動到 Color 按鈕的左邊
             btn_pos = self.btn_color.mapToGlobal(QPoint(0, 0))
             self.color_dialog.adjustSize()
             x = btn_pos.x() - self.color_dialog.width() - 5
             y = btn_pos.y()
             
-            # 避免超出螢幕底部
             screen_geo = QApplication.desktop().availableGeometry(btn_pos)
             if y + self.color_dialog.height() > screen_geo.bottom():
                 y = screen_geo.bottom() - self.color_dialog.height() - 5
+            if y < screen_geo.top():
+                y = screen_geo.top() + 5
                 
             self.color_dialog.move(x, y)
             self.color_dialog.show()
@@ -1357,11 +1425,8 @@ class WaterfallApp(QMainWindow):
         if len(raw_data) != self.current_max_samples:
             if abs(len(raw_data) - self.current_max_samples) > 0:
                 self.current_max_samples = len(raw_data)
-                self.data = np.zeros((MAX_ROWS, self.current_max_samples))
+                self.data = np.full((MAX_ROWS, self.current_max_samples), self.color_min_val, dtype=np.float64)
                 self.depth_history = np.full(MAX_ROWS, np.nan)
-                self.depth_line.setData(
-                    x=np.arange(MAX_ROWS), y=self.depth_history, connect="finite"
-                )
 
         self.data = np.roll(self.data, -1, axis=0)
         self.data[-1, :] = raw_data
@@ -1369,15 +1434,26 @@ class WaterfallApp(QMainWindow):
         self.imageitem.setImage(self.data.T, autoLevels=False)
 
         # -------------------------------------------------------------
-        # 結合 Auto(固定底噪) 與 Manual(自訂數值) 的畫圖邏輯
+        # [效能與穩定度完美結合] 只算最新一條線，但加入 EMA 避震器濾波
         # -------------------------------------------------------------
         if self.auto_color_enabled:
-            sigma = np.std(self.data)
-            mean = np.mean(self.data)
-            if sigma == 0: sigma = 1
+            curr_mean = np.mean(raw_data)
+            curr_sigma = np.std(raw_data)
+            if curr_sigma == 0: curr_sigma = 1
             
-            min_level = 10 
-            max_level = mean + 2.5 * sigma
+            # 如果是剛開機或剛切換解析度，先用當下的數值作為基準
+            if self.ema_mean is None:
+                self.ema_mean = curr_mean
+                self.ema_sigma = curr_sigma
+            else:
+                # [核心] 指數平滑公式。0.1 代表「接受 10% 新變化，保留 90% 歷史記憶」
+                # 如果您覺得顏色適應得太慢，可以改為 0.2 或 0.3；若覺得還是會閃，可以改為 0.05
+                alpha = 0.1 
+                self.ema_mean = (alpha * curr_mean) + ((1 - alpha) * self.ema_mean)
+                self.ema_sigma = (alpha * curr_sigma) + ((1 - alpha) * self.ema_sigma)
+            
+            min_level = self.color_min_val
+            max_level = self.ema_mean + 1.5 * self.ema_sigma
             if max_level <= min_level: max_level = min_level + 1
             
             self.current_display_min = min_level
@@ -1387,7 +1463,6 @@ class WaterfallApp(QMainWindow):
             self.current_display_min = self.color_min_val
             self.current_display_max = self.color_max_val
             self.imageitem.setLevels((self.color_min_val, self.color_max_val))
-        # -------------------------------------------------------------
 
         depth_m = (depth_index * SAMPLE_RESOLUTION) / 100.0
         ovr_m = (override_idx * SAMPLE_RESOLUTION) / 100.0
@@ -1426,13 +1501,25 @@ class WaterfallApp(QMainWindow):
         self.depth_history = np.roll(self.depth_history, -1)
         self.depth_history[-1] = line_target_idx
         
+        # -------------------------------------------------------------
+        # [修改] 智慧斷線：超過 INDEX_TOLERANCE 落差時不連線
+        # -------------------------------------------------------------
         if self.show_depth_line:
+            connections = np.ones(MAX_ROWS, dtype=bool)
+            with np.errstate(invalid='ignore'): # 忽略 NaN 警告
+                diffs = np.abs(np.diff(self.depth_history))
+                connections[:-1] = diffs <= INDEX_TOLERANCE
+            
+            # 確保 NaN 點絕對不會被連線
+            connections[np.isnan(self.depth_history)] = False
+
             self.depth_line.setData(
-                x=np.arange(MAX_ROWS), y=self.depth_history, connect="finite"
+                x=np.arange(MAX_ROWS), y=self.depth_history, connect=connections
             )
             self.depth_line.show()
         else:
             self.depth_line.hide()
+        # -------------------------------------------------------------
 
         if self.large_depth_visible:
             color_hex = "#FFFFFF" if overlay_reliable else "rgba(255, 255, 255, 0.2)"
@@ -1495,9 +1582,6 @@ class WaterfallApp(QMainWindow):
         else:
             self.lbl_temp.setStyleSheet("")
             
-        # -------------------------------------------------------------
-        # [新增] 每秒更新浮動視窗內的即時數值
-        # -------------------------------------------------------------
         if hasattr(self, 'color_dialog') and self.color_dialog and self.color_dialog.isVisible():
             self.color_dialog.update_realtime_values(self.current_display_min, self.current_display_max)
 
