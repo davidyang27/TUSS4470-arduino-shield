@@ -102,6 +102,13 @@ RANGE_OPTIONS_WATER = [40.0, 20.0, 10.0, 5.0, 4.0, 3.0, 2.0, 1.0]
 MIN_VIEW_METERS_AIR = 0.5
 MIN_VIEW_METERS_WATER = 1.8
 
+# -------------------------------------------------------------
+# [新增] 預設盲區距離 (單位：公分)
+# -------------------------------------------------------------
+DEFAULT_BLIND_ZONE_AIR_CM = 60
+DEFAULT_BLIND_ZONE_WATER_CM = 200
+# -------------------------------------------------------------
+
 SPEED_OPTIONS = [
     ("Standard (11.5us)", 11.5),
     ("Long Range (25us)", 25.0),
@@ -688,6 +695,11 @@ class SettingsDialog(QDialog):
 
         self.blind_input = QLineEdit(str(self.main_app.blind_zone_val))
         
+        # -------------------------------------------------------------
+        # [新增] 綁定下拉選單改變事件，自動切換盲區預設值
+        # -------------------------------------------------------------
+        self.speed_dropdown.currentIndexChanged.connect(self.on_env_changed)
+        
         self.mode_combo = QComboBox()
         self.mode_combo.addItems(["40kHz Only", "200kHz Only", "Dual (40k/200k)"])
         self.mode_combo.setCurrentIndex(self.main_app.operating_mode)
@@ -839,6 +851,17 @@ class SettingsDialog(QDialog):
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
             self.drag_pos = event.globalPos() - self.frameGeometry().topLeft()
+            
+    # -------------------------------------------------------------
+    # [修改] 當環境下拉選單改變時，呼叫全域變數動態更新
+    # -------------------------------------------------------------
+    def on_env_changed(self, index):
+        if index == 0:
+            # 選擇 Air (空氣)
+            self.blind_input.setText(str(DEFAULT_BLIND_ZONE_AIR_CM))
+        else:
+            # 選擇 Water (水中)
+            self.blind_input.setText(str(DEFAULT_BLIND_ZONE_WATER_CM))
 
     def mouseMoveEvent(self, event):
         if event.buttons() == Qt.LeftButton and self.drag_pos is not None:
@@ -897,11 +920,19 @@ class SettingsDialog(QDialog):
             pass 
 
         self.main_app.operating_mode = self.mode_combo.currentIndex()
-        self.main_app.set_sample_delay(new_delay)
 
+        # =========================================================
+        # [修復] 必須先設定聲速，再傳送指令！(把這兩塊的順序對調)
+        # =========================================================
+        # 1. 先切換聲速環境 (更新系統的 SAMPLE_RESOLUTION)
         speed = AIR_SPEED if self.speed_dropdown.currentIndex() == 0 else WATER_SPEED
         if speed != self.main_app.current_speed:
             self.main_app.set_sound_speed(speed)
+
+        # 2. 再更新 Delay 並計算盲區點數傳給 Arduino 
+        # (這樣它才會拿到最新算出來的正確點數！)
+        self.main_app.set_sample_delay(new_delay)
+        # =========================================================
 
         self.main_app.large_depth_visible = self.large_depth_checkbox.isChecked()
         self.main_app.depth_overlay.setVisible(self.main_app.large_depth_visible)
@@ -954,7 +985,10 @@ class WaterfallApp(QMainWindow):
         self.current_sample_delay = CURRENT_SAMPLE_DELAY_US
 
         self.current_cycles = 16
-        self.blind_zone_val = 60
+        
+        # [修改] 讓初始盲區自動跟隨上方定義的常數與預設環境
+        self.blind_zone_val = DEFAULT_BLIND_ZONE_AIR_CM if DEFAULT_ENVIRONMENT == "AIR" else DEFAULT_BLIND_ZONE_WATER_CM
+        
         self.operating_mode = 1 # 0: 40kHz, 1: 200kHz, 2: Dual
 
         # 色彩控制狀態變數
