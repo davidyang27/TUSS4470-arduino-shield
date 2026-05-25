@@ -171,6 +171,7 @@ void setup()
   tuss4470Write(0x1A, 0x00); // Continuous Mode
   tuss4470Write(0x17, THRESHOLD_VALUE); 
   tuss4470Write(0x13, 0x06); 
+  tuss4470Write(0x16, 0x1F); 
 
   // ===========================================================
   // [關鍵修正] 在 setup 中只把 Timer 建立並開啟一次，避免 loop 中資源崩潰
