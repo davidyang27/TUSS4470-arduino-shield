@@ -83,7 +83,7 @@ void burstCallback(timer_callback_args_t *) {
   if (pulseCount >= currentToggleCount) { 
     burstTimer.stop();
     pulseCount = 0;  
-    digitalWrite(IO2, LOW); // 確保最後停在 LOW
+    digitalWrite(IO2, HIGH); // 確保最後停在 LOW
   }
 }
 
@@ -98,7 +98,7 @@ void handleInterrupt() {
 void stopTransducer() {
   burstTimer.stop();
   pulseCount = 0;
-  digitalWrite(IO2, LOW); 
+  digitalWrite(IO2, HIGH); 
 }
 
 // ======================================================================
@@ -161,13 +161,13 @@ void setup()
   digitalWrite(IO1, HIGH);
   
   pinMode(IO2, OUTPUT);
-  digitalWrite(IO2, LOW);
+  digitalWrite(IO2, HIGH);
   
   pinMode(O4, INPUT_PULLUP);
   attachInterrupt(digitalPinToInterrupt(O4), handleInterrupt, RISING);
 
   // 初始化 TUSS4470 暫存器
-  tuss4470Write(0x11, 0x10);                        
+  tuss4470Write(0x11, 0x10);                    
   tuss4470Write(0x1A, 0x00); // Continuous Mode
   tuss4470Write(0x17, THRESHOLD_VALUE); 
   tuss4470Write(0x13, 0x06); 
